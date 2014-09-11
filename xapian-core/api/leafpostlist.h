@@ -69,6 +69,9 @@ class LeafPostList : public PostList {
      */
     void set_termweight(const Xapian::Weight * weight_);
 
+    double resolve_lazy_termweight(const Xapian::Weight * weight_,
+				   Xapian::Weight::Internal * stats);
+
     /** Return the exact term frequency.
      *
      *  Leaf postlists have an exact termfreq, which get_termfreq_min(),

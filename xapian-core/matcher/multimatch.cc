@@ -349,7 +349,7 @@ MultiMatch::MultiMatch(const Xapian::Database &db_,
 	leaves.push_back(smatch);
     }
 
-    stats.mark_wanted_terms(query);
+    stats.set_query(query);
     prepare_sub_matches(leaves, errorhandler, stats);
     stats.set_bounds_from_db(db);
 }
@@ -435,6 +435,7 @@ MultiMatch::get_mset(Xapian::doccount first, Xapian::doccount maxitems,
     for (size_t i = 0; i != leaves.size(); ++i) {
 	PostList *pl;
 	try {
+	    // FIXME: OP_WILDCARD expanded here...
 	    pl = leaves[i]->get_postlist(this, &total_subqs);
 	    if (is_remote[i]) {
 		if (pl->get_termfreq_min() > first + maxitems) {

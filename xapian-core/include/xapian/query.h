@@ -109,6 +109,7 @@ class XAPIAN_VISIBILITY_DEFAULT Query {
 	OP_VALUE_LE = 12,
 	OP_SYNONYM = 13,
 	OP_MAX = 14,
+	OP_WILDCARD = 15,
 
 	LEAF_TERM = 100,
 	LEAF_POSTING_SOURCE,
@@ -173,6 +174,12 @@ class XAPIAN_VISIBILITY_DEFAULT Query {
     // OP_VALUE_RANGE
     Query(op op_, Xapian::valueno slot,
 	  const std::string & begin, const std::string & end);
+
+    // OP_WILDCARD
+    Query(op op_,
+	  const std::string & pattern,
+	  Xapian::termcount max_expansion = 0,
+	  op combiner = OP_SYNONYM);
 
     template<typename I>
     Query(op op_, I begin, I end, Xapian::termcount window = 0)

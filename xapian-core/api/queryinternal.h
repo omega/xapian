@@ -381,6 +381,35 @@ class QueryMax : public QueryOrLike {
     std::string get_description() const;
 };
 
+class QueryWildcard : public Query::Internal {
+    std::string pattern;
+
+    Xapian::termcount max_expansion;
+
+    Query::op combiner;
+
+    // FIXME: move all these get_op() definitions out of the header if we end
+    // up keeping them.
+    Xapian::Query::op get_op() const { return Xapian::Query::OP_WILDCARD; }
+
+  public:
+    QueryWildcard(const std::string &pattern_,
+		  Xapian::termcount max_expansion_,
+		  Query::op combiner_)
+	: pattern(pattern_), max_expansion(max_expansion_), combiner(combiner_)
+    { }
+
+    Xapian::Query::op get_type() const;
+
+    PostingIterator::Internal * postlist(QueryOptimiser * qopt, double factor) const;
+
+    termcount get_length() const;
+
+    void serialise(std::string & result) const;
+
+    std::string get_description() const;
+};
+
 }
 
 }

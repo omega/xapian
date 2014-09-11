@@ -36,33 +36,33 @@ class XAPIAN_VISIBILITY_DEFAULT Weight {
     /// Stats which the weighting scheme can use (see @a need_stat()).
     typedef enum {
 	/// Number of documents in the collection.
-	COLLECTION_SIZE = 1,
+	COLLECTION_SIZE = 1, // per DB
 	/// Number of documents in the RSet.
-	RSET_SIZE = 2,
+	RSET_SIZE = 2, // per QUERY (effectively)
 	/// Average length of documents in the collection.
-	AVERAGE_LENGTH = 4,
+	AVERAGE_LENGTH = 4, // per DB
 	/// How many documents the current term is in.
-	TERMFREQ = 8,
+	TERMFREQ = 8, // per TERM
 	/// How many documents in the RSet the current term is in.
-	RELTERMFREQ = 16,
+	RELTERMFREQ = 16, // per TERM
 	/// Sum of wqf for terms in the query.
-	QUERY_LENGTH = 32,
+	QUERY_LENGTH = 32, // per QUERY
 	/// Within-query-frequency of the current term.
-	WQF = 64,
+	WQF = 64, // per QUERY
 	/// Within-document-frequency of the current term in the current document.
-	WDF = 128,
+	WDF = 128, // per DOC & TERM
 	/// Length of the current document (sum wdf).
-	DOC_LENGTH = 256,
+	DOC_LENGTH = 256, // per DOC
 	/// Lower bound on (non-zero) document lengths.
-	DOC_LENGTH_MIN = 512,
+	DOC_LENGTH_MIN = 512, // per DB
 	/// Upper bound on document lengths.
-	DOC_LENGTH_MAX = 1024,
+	DOC_LENGTH_MAX = 1024, // per DB
 	/// Upper bound on wdf.
-	WDF_MAX = 2048,
+	WDF_MAX = 2048, // per DOC ?
 	/// Sum of wdf over the whole collection for the current term.
-	COLLECTION_FREQ = 4096,
+	COLLECTION_FREQ = 4096, // per TERM
 	/// Number of unique terms in the current document.
-	UNIQUE_TERMS = 8192
+	UNIQUE_TERMS = 8192 // per DOC
     } stat_flags;
 
     /** Tell Xapian that your subclass will want a particular statistic.

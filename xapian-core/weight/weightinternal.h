@@ -90,6 +90,9 @@ class Weight::Internal {
     /** Database to get the bounds on doclength and wdf from. */
     Xapian::Database db;
 
+    /** The query. */
+    Xapian::Query query;
+
     /** Map of term frequencies and relevant term frequencies for the
      *  collection. */
     std::map<std::string, TermFreqs> termfreqs;
@@ -105,15 +108,11 @@ class Weight::Internal {
      */
     Internal & operator +=(const Internal & inc);
 
-    /// Mark the terms we need to collate stats for.
-    void mark_wanted_terms(const Xapian::Query &query) {
-	Xapian::TermIterator t;
-	for (t = query.get_terms_begin(); t != Xapian::TermIterator(); ++t) {
-	    termfreqs.insert(make_pair(*t, TermFreqs()));
-	}
+    void set_query(const Xapian::Query &query_) {
+	query = query_;
     }
 
-    /// Accumulate the rtermfreqs for terms marked by mark_wanted_terms().
+    /// Accumulate the rtermfreqs for terms in the query.
     void accumulate_stats(const Xapian::Database::Internal &sub_db,
 			  const Xapian::RSet &rset);
 
@@ -182,8 +181,8 @@ class Weight::Internal {
 	have_max_part = true;
 	Assert(!term.empty());
 	map<string, TermFreqs>::iterator i = termfreqs.find(term);
-	Assert(i != termfreqs.end());
-	i->second.max_part += max_part;
+	if (i != termfreqs.end())
+	    i->second.max_part += max_part;
     }
 
     Xapian::doclength get_average_length() const {

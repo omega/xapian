@@ -76,14 +76,16 @@ Weight::Internal::accumulate_stats(const Xapian::Database::Internal &subdb,
     rset_size += rset.size();
 
     total_term_count += subdb.get_doccount() * subdb.get_total_length();
-    map<string, TermFreqs>::iterator t;
-    for (t = termfreqs.begin(); t != termfreqs.end(); ++t) {
-	const string & term = t->first;
+    Xapian::TermIterator t;
+    for (t = query.get_terms_begin(); t != Xapian::TermIterator(); ++t) {
+	const string & term = *t;
+
 	Xapian::doccount sub_tf;
 	Xapian::termcount sub_cf;
 	subdb.get_freqs(term, &sub_tf, &sub_cf);
-	t->second.termfreq += sub_tf;
-	t->second.collfreq += sub_cf;
+	TermFreqs & tf = termfreqs[term];
+	tf.termfreq += sub_tf;
+	tf.collfreq += sub_cf;
     }
 
     const set<Xapian::docid> & items(rset.internal->get_items());
@@ -95,15 +97,16 @@ Weight::Internal::accumulate_stats(const Xapian::Database::Internal &subdb,
 	// and we can skip the document's termlist, so look for each query term
 	// in the document.
 	AutoPtr<TermList> tl(subdb.open_term_list(did));
-	for (t = termfreqs.begin(); t != termfreqs.end(); ++t) {
-	    const string & term = t->first;
+	map<string, TermFreqs>::iterator i;
+	for (i = termfreqs.begin(); i != termfreqs.end(); ++i) {
+	    const string & term = i->first;
 	    TermList * ret = tl->skip_to(term);
 	    Assert(ret == NULL);
 	    (void)ret;
 	    if (tl->at_end())
 		break;
 	    if (term == tl->get_termname())
-		++t->second.reltermfreq;
+		++i->second.reltermfreq;
 	}
     }
 }

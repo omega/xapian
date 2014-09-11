@@ -227,6 +227,34 @@ DEFINE_TESTCASE(stubdb6, inmemory) {
     return true;
 }
 
+// Check that stub databases work remotely with a local sibling.
+DEFINE_TESTCASE(stubdb8, backend && !inmemory && !remote) {
+    // Only works for backends which have a path.
+    mkdir(".stub", 0755);
+    const char * dbpath = ".stub/stubdb8";
+    ofstream out(dbpath);
+    TEST(out.is_open());
+    out << "remote :" << BackendManager::get_xapian_progsrv_command()
+	<< ' ' << get_database_path("apitest_simpledata") << endl;
+    out << "auto ../" << get_database_path("apitest_simpledata2") << endl;
+    out.close();
+
+    {
+	Xapian::Database db(dbpath, Xapian::DB_BACKEND_STUB);
+	Xapian::Enquire enquire(db);
+	enquire.set_query(Xapian::Query("word"));
+	enquire.get_mset(0, 10);
+    }
+    {
+	Xapian::Database db(dbpath);
+	Xapian::Enquire enquire(db);
+	enquire.set_query(Xapian::Query("word"));
+	enquire.get_mset(0, 10);
+    }
+
+    return true;
+}
+
 #if 0 // the "force error" mechanism is no longer in place...
 class MyErrorHandler : public Xapian::ErrorHandler {
     public:

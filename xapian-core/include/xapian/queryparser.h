@@ -576,9 +576,10 @@ class XAPIAN_VISIBILITY_DEFAULT QueryParser {
      */
     void set_database(const Database &db);
 
-    /** Specify the maximum expansion of a wildcard term.
+    /** Specify the maximum expansion of a wildcard or partial term.
      *
-     *  Note: you must also set FLAG_WILDCARD for wildcard expansion to happen.
+     *  Note: you must also set FLAG_WILDCARD and/or FLAG_PARTIAL for this
+     *  setting to have anything to affect.
      *
      *  @param limit	The maximum number of terms each wildcard in the query
      *			can expand to, or 0 for no limit (which is the default).
