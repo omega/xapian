@@ -24,9 +24,21 @@
  * Make sure that remote use isn't trying to use stats before they are
  * available (more assertions + more testcases probably)
  *
+ * Need test harness support for multi remote and multi mixed.  Slot new
+ * hand-setup testcase into that framework once done.
+ *
+ * Tested by hand (automated tests needed):
+ *
+ *   + wildcard and term with wildcard on 2 local, 2 remote and remote+local.
+ *
+ * Need to test synonym similarly.  Ought to test partial, but that shouldn't
+ * be different.
+ *
  * Resolve new FIXME: git diff|grep '^+.*FIXME'
  *
  * Testcases for wildcard expansion limits of partial queries.
+ *
+ * Clear up unrelated debugging code in remote backend.
  */
 
 #include <config.h>

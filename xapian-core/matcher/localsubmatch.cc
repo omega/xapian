@@ -211,7 +211,8 @@ LocalSubMatch::get_postlist(MultiMatch * matcher,
     }
 
     AutoPtr<Xapian::Weight> extra_wt(wt_factory->clone());
-    extra_wt->init_(*stats, qlen); // Only uses term-indep. stats.
+    // Only uses term-indep. stats.
+    extra_wt->init_(*stats, qlen);
     if (extra_wt->get_maxextra() != 0.0) {
 	// There's a term-independent weight contribution, so we combine the
 	// postlist tree with an ExtraWeightPostList which adds in this
