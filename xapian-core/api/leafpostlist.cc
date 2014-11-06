@@ -63,19 +63,6 @@ LeafPostList::set_termweight(const Xapian::Weight * weight_)
 }
 
 double
-LeafPostList::resolve_lazy_termweight(const Xapian::Weight * weight_,
-				      Xapian::Weight::Internal * stats)
-{
-    // There should be an existing LazyWeight set already.
-    Assert(weight);
-    swap(weight, weight_);
-    delete weight_;
-    need_doclength = weight->get_sumpart_needs_doclength_();
-    double max_part = (stats->termfreqs[term].max_part += weight->get_maxpart());
-    return max_part;
-}
-
-double
 LeafPostList::get_maxweight() const
 {
     return weight ? weight->get_maxpart() : 0;
