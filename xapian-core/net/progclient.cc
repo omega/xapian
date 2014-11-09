@@ -141,9 +141,8 @@ ProgClient::run_program(const string &progname, const string &args
     }
 
     // close unnecessary file descriptors
-    closefrom(3);
+    closefrom(2);
 
-#if 0
     // Redirect stderr to /dev/null
     int stderrfd = open("/dev/null", O_WRONLY);
     if (stderrfd == -1) {
@@ -154,7 +153,6 @@ ProgClient::run_program(const string &progname, const string &args
 	dup2(stderrfd, 2);
 	::close(stderrfd);
     }
-#endif
 
     vector<string> argvec;
     split_words(args, argvec);

@@ -37,8 +37,6 @@
  * Resolve new FIXME: git diff|grep '^+.*FIXME'
  *
  * Testcases for wildcard expansion limits of partial queries.
- *
- * Clear up unrelated debugging code in remote backend.
  */
 
 #include <config.h>
