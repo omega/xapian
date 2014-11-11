@@ -891,14 +891,14 @@ QueryWildcard::postlist(QueryOptimiser * qopt, double factor) const
 	ctx.add_postlist(qopt->open_lazy_post_list(term, 1, or_factor));
     }
     if (ctx.empty())
-	return new EmptyPostList;
+	RETURN(new EmptyPostList);
 
     if (op == Query::OP_MAX)
-	return ctx.postlist_max(qopt);
+	RETURN(ctx.postlist_max(qopt));
 
     PostList * pl = ctx.postlist(qopt);
     if (op == Query::OP_OR)
-	return pl;
+	RETURN(pl);
 
     // We build an OP_OR tree for OP_SYNONYM and then wrap it in a
     // SynonymPostList, which supplies the weights.
