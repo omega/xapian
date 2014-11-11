@@ -1,6 +1,6 @@
 /* queryparsertest.cc: Tests of Xapian::QueryParser
  *
- * Copyright (C) 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013 Olly Betts
+ * Copyright (C) 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014 Olly Betts
  * Copyright (C) 2007,2009 Lemur Consulting Ltd
  *
  * This program is free software; you can redistribute it and/or
@@ -1060,15 +1060,15 @@ static bool test_qp_flag_wildcard3()
     test_qp_flag_wildcard1_helper(db, 6, "m*");
 
     // These cases should expand to one more than the limit.
-    TEST_EXCEPTION(Xapian::QueryParserError,
+    TEST_EXCEPTION(Xapian::WildcardError,
 	test_qp_flag_wildcard1_helper(db, 1, "muscle*"));
-    TEST_EXCEPTION(Xapian::QueryParserError,
+    TEST_EXCEPTION(Xapian::WildcardError,
 	test_qp_flag_wildcard1_helper(db, 3, "musc*"));
-    TEST_EXCEPTION(Xapian::QueryParserError,
+    TEST_EXCEPTION(Xapian::WildcardError,
 	test_qp_flag_wildcard1_helper(db, 3, "mus*"));
-    TEST_EXCEPTION(Xapian::QueryParserError,
+    TEST_EXCEPTION(Xapian::WildcardError,
 	test_qp_flag_wildcard1_helper(db, 4, "mu*"));
-    TEST_EXCEPTION(Xapian::QueryParserError,
+    TEST_EXCEPTION(Xapian::WildcardError,
 	test_qp_flag_wildcard1_helper(db, 5, "m*"));
 
     return true;

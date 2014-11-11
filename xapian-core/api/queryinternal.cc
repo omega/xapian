@@ -885,8 +885,7 @@ QueryWildcard::postlist(QueryOptimiser * qopt, double factor) const
 	    msg += "* expands to more than ";
 	    msg += str(max_expansion);
 	    msg += " terms";
-	    // FIXME: This error class seems less appropriate now...
-	    throw Xapian::QueryParserError(msg);
+	    throw Xapian::WildcardError(msg);
 	}
 	const string & term = t->get_termname();
 	ctx.add_postlist(qopt->open_lazy_post_list(term, 1, or_factor));
