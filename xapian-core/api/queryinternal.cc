@@ -1637,6 +1637,12 @@ QueryMax::get_op() const
     return Xapian::Query::OP_MAX;
 }
 
+Xapian::Query::op
+QueryWildcard::get_op() const
+{
+    return Xapian::Query::OP_WILDCARD;
+}
+
 string
 QueryAnd::get_description() const
 {

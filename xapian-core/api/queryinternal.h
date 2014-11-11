@@ -388,9 +388,7 @@ class QueryWildcard : public Query::Internal {
 
     Query::op combiner;
 
-    // FIXME: move all these get_op() definitions out of the header if we end
-    // up keeping them.
-    Xapian::Query::op get_op() const { return Xapian::Query::OP_WILDCARD; }
+    Xapian::Query::op get_op() const;
 
   public:
     QueryWildcard(const std::string &pattern_,
