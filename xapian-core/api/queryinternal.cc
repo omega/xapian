@@ -164,6 +164,10 @@ class Context {
     bool empty() const {
 	return pls.empty();
     }
+
+    size_t size() const {
+	return pls.size();
+    }
 };
 
 Context::Context(size_t reserve) {
@@ -890,6 +894,15 @@ QueryWildcard::postlist(QueryOptimiser * qopt, double factor) const
 	const string & term = t->get_termname();
 	ctx.add_postlist(qopt->open_lazy_post_list(term, 1, or_factor));
     }
+
+    if (factor != 0.0) {
+	if (op != Query::OP_SYNONYM) {
+	    qopt->set_total_subqs(qopt->get_total_subqs() + ctx.size());
+	} else {
+	    qopt->inc_total_subqs();
+	}
+    }
+
     if (ctx.empty())
 	RETURN(new EmptyPostList);
 
