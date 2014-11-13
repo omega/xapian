@@ -129,7 +129,7 @@ try_next_port:
 	close(fds[0]);
 	// Connect stdout and stderr to the socket.
 	dup2(fds[1], 1);
-	dup2(fds[1], 2);
+	//dup2(fds[1], 2);
 	execl("/bin/sh", "/bin/sh", "-c", cmd.c_str(), (void*)NULL);
 	_exit(-1);
     }

@@ -365,6 +365,8 @@ try {
 
     cout << "Parsed Query: " << query.get_description() << endl;
 
+    query = Xapian::Query(query.OP_WILDCARD, "the", 20, query.OP_OR);
+
     if (!have_database) {
 	cout << "No database specified so not running the query." << endl;
 	exit(0);
