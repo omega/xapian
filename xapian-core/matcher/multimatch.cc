@@ -64,6 +64,7 @@
 #include <set>
 
 #include <iostream>
+#include <unistd.h>
 
 #ifdef HAVE_TIMER_CREATE
 #include <signal.h>
@@ -477,7 +478,7 @@ MultiMatch::get_mset(Xapian::doccount first, Xapian::doccount maxitems,
 
     LOGLINE(MATCH, "pl = (" << pl->get_description() << ")");
 
-cerr << "got the postlist: " << pl->get_description() << endl;
+cerr << getpid() << ": got the postlist: " << pl->get_description() << endl;
 
     // Empty result set
     Xapian::doccount docs_matched = 0;
@@ -885,13 +886,13 @@ new_greatest_weight:
 	    RemoteSubMatch * rem_match;
 	    rem_match = static_cast<RemoteSubMatch*>(leaves[n].get());
 	    percent_scale = rem_match->get_percent_factor() / 100.0;
-cerr << "percent_scale from remote #" << n << " = " << percent_scale << endl;
+cerr << getpid() << ": percent_scale from remote #" << n << " = " << percent_scale << endl;
 	} else
 #endif
 	{
 	    percent_scale = greatest_wt_subqs_matched / double(total_subqs);
 	    percent_scale /= greatest_wt;
-cerr << "percent_scale = " << greatest_wt_subqs_matched << " / " << total_subqs << " / " << greatest_wt << endl;
+cerr << getpid() << ": percent_scale = " << greatest_wt_subqs_matched << " / " << total_subqs << " / " << greatest_wt << endl;
 	}
 	Assert(percent_scale > 0);
 	if (percent_cutoff) {

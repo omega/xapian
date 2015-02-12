@@ -38,6 +38,7 @@
 #include <map>
 #include <string>
 
+#include <unistd.h>
 #include <iostream>
 
 using namespace std;
@@ -307,7 +308,7 @@ LocalSubMatch::open_post_list(const string& term,
 	    // Delay initialising the actual weight object, so that we can
 	    // gather stats for the terms lazily expanded from a wildcard
 	    // (needed for the remote database case).
-cerr << "Lazyweight created for term '" << term << "'" << endl;
+cerr << getpid() << ": Lazyweight created for term '" << term << "'" << endl;
 	    wt = new LazyWeight(pl, wt, stats, qlen, wqf, factor);
 	}
 	pl->set_termweight(wt);

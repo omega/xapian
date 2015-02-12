@@ -26,6 +26,7 @@
 
 #include <string>
 
+#include <unistd.h>
 #include <iostream>
 using namespace std;
 
@@ -78,7 +79,7 @@ class LeafPostList : public PostList {
 				   Xapian::termcount wqf,
 				   double factor)
     {
-	cerr << "resolving lazy termweight for '" << term << "'" << endl;
+	cerr << getpid() << ": resolving lazy termweight for '" << term << "'" << endl;
 	weight_->init_(*stats, qlen, term, wqf, factor);
 	// There should be an existing LazyWeight set already.
 	Assert(weight);
