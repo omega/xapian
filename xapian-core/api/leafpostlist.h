@@ -1,7 +1,7 @@
 /** @file leafpostlist.h
  * @brief Abstract base class for leaf postlists.
  */
-/* Copyright (C) 2007,2009,2011,2013 Olly Betts
+/* Copyright (C) 2007,2009,2011,2013,2015 Olly Betts
  * Copyright (C) 2009 Lemur Consulting Ltd
  *
  * This program is free software; you can redistribute it and/or
@@ -25,10 +25,6 @@
 #include "postlist.h"
 
 #include <string>
-
-#include <unistd.h>
-#include <iostream>
-using namespace std;
 
 namespace Xapian {
     class Weight;
@@ -79,7 +75,6 @@ class LeafPostList : public PostList {
 				   Xapian::termcount wqf,
 				   double factor)
     {
-	cerr << getpid() << ": resolving lazy termweight for '" << term << "'" << endl;
 	weight_->init_(*stats, qlen, term, wqf, factor);
 	// There should be an existing LazyWeight set already.
 	Assert(weight);

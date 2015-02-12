@@ -28,8 +28,6 @@
 #include <algorithm>
 #include <iostream>
 
-#include <unistd.h>
-
 #include "gnu_getopt.h"
 
 using namespace std;
@@ -355,7 +353,6 @@ try {
 	exit(1);
     }
 
-    cerr << getpid() << ": main process is this one" << endl;
     parser.set_database(db);
     parser.set_stemmer(stemmer);
     parser.set_stemming_strategy(Xapian::QueryParser::STEM_SOME);
@@ -367,9 +364,6 @@ try {
 	cout << "Did you mean: " << correction << "\n\n";
 
     cout << "Parsed Query: " << query.get_description() << endl;
-
-    query = Xapian::Query(query.OP_WILDCARD, "p", 20, query.OP_OR);
-    query = Xapian::Query(query.OP_AND, query, Xapian::Query("the"));
 
     if (!have_database) {
 	cout << "No database specified so not running the query." << endl;

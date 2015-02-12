@@ -1,7 +1,7 @@
 /** @file queryinternal.cc
  * @brief Xapian::Query internals
  */
-/* Copyright (C) 2007,2008,2009,2010,2011,2012,2013,2014 Olly Betts
+/* Copyright (C) 2007,2008,2009,2010,2011,2012,2013,2014,2015 Olly Betts
  * Copyright (C) 2008,2009 Lemur Consulting Ltd
  *
  * This program is free software; you can redistribute it and/or
@@ -17,26 +17,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
- */
-
-/* To do list for delayed wildcard expansion:
- *
- * Make sure that remote use isn't trying to use stats before they are
- * available (more assertions + more testcases probably)
- *
- * Need test harness support for multi remote and multi mixed.  Slot new
- * hand-setup testcase into that framework once done.
- *
- * Tested by hand (automated tests needed):
- *
- *   + wildcard and term with wildcard on 2 local, 2 remote and remote+local.
- *
- * Need to test synonym similarly.  Ought to test partial, but that shouldn't
- * be different.
- *
- * Resolve new FIXME: git diff|grep '^+.*FIXME'
- *
- * Testcases for wildcard expansion limits of partial queries.
  */
 
 #include <config.h>
@@ -77,8 +57,6 @@
 #include <list>
 #include <string>
 #include <vector>
-
-#include <iostream>
 
 using namespace std;
 
@@ -918,9 +896,7 @@ QueryWildcard::postlist(QueryOptimiser * qopt, double factor) const
     // We build an OP_OR tree for OP_SYNONYM and then wrap it in a
     // SynonymPostList, which supplies the weights.
     // FIXME: it looks like this uses the stats
-    cerr << "about to call make_synonym_postlist for " << pattern << "*" << endl;
     PostingIterator::Internal * r = qopt->make_synonym_postlist(pl, factor);
-    cerr << "called make_synonym_postlist for " << pattern << "*" << endl;
     RETURN(r);
 }
 

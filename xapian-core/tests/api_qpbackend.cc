@@ -1,7 +1,7 @@
 /** @file api_qpbackend.cc
  * @brief QueryParser tests which need a backend
  */
-/* Copyright (c) 2009 Olly Betts
+/* Copyright (c) 2009,2015 Olly Betts
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as

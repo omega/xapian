@@ -2,7 +2,7 @@
  *
  * Copyright 1999,2000,2001 BrightStation PLC
  * Copyright 2001,2002 Ananova Ltd
- * Copyright 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2013,2014 Olly Betts
+ * Copyright 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2013,2014,2015 Olly Betts
  * Copyright 2003 Orange PCS Ltd
  * Copyright 2003 Sam Liddicott
  * Copyright 2007,2008,2009 Lemur Consulting Ltd
@@ -62,9 +62,6 @@
 #include <vector>
 #include <map>
 #include <set>
-
-#include <iostream>
-#include <unistd.h>
 
 #ifdef HAVE_TIMER_CREATE
 #include <signal.h>
@@ -438,7 +435,6 @@ MultiMatch::get_mset(Xapian::doccount first, Xapian::doccount maxitems,
     for (size_t i = 0; i != leaves.size(); ++i) {
 	PostList *pl;
 	try {
-	    // FIXME: OP_WILDCARD expanded here...
 	    pl = leaves[i]->get_postlist(this, &total_subqs);
 	    if (is_remote[i]) {
 		if (pl->get_termfreq_min() > first + maxitems) {
@@ -477,8 +473,6 @@ MultiMatch::get_mset(Xapian::doccount first, Xapian::doccount maxitems,
     }
 
     LOGLINE(MATCH, "pl = (" << pl->get_description() << ")");
-
-cerr << getpid() << ": got the postlist: " << pl->get_description() << endl;
 
     // Empty result set
     Xapian::doccount docs_matched = 0;
@@ -886,13 +880,11 @@ new_greatest_weight:
 	    RemoteSubMatch * rem_match;
 	    rem_match = static_cast<RemoteSubMatch*>(leaves[n].get());
 	    percent_scale = rem_match->get_percent_factor() / 100.0;
-cerr << getpid() << ": percent_scale from remote #" << n << " = " << percent_scale << endl;
 	} else
 #endif
 	{
 	    percent_scale = greatest_wt_subqs_matched / double(total_subqs);
 	    percent_scale /= greatest_wt;
-cerr << getpid() << ": percent_scale = " << greatest_wt_subqs_matched << " / " << total_subqs << " / " << greatest_wt << endl;
 	}
 	Assert(percent_scale > 0);
 	if (percent_cutoff) {

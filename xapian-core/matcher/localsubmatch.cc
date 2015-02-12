@@ -38,9 +38,6 @@
 #include <map>
 #include <string>
 
-#include <unistd.h>
-#include <iostream>
-
 using namespace std;
 
 /** Xapian::Weight subclass which adds laziness.
@@ -207,7 +204,7 @@ LocalSubMatch::get_postlist(MultiMatch * matcher,
     }
 
     AutoPtr<Xapian::Weight> extra_wt(wt_factory->clone());
-    // Only uses term-indep. stats.
+    // Only uses term-independent stats.
     extra_wt->init_(*stats, qlen);
     if (extra_wt->get_maxextra() != 0.0) {
 	// There's a term-independent weight contribution, so we combine the
@@ -242,7 +239,7 @@ LocalSubMatch::make_synonym_postlist(PostList * or_pl, MultiMatch * matcher,
     // we need to catch the case where all the non-empty subdatabases have
     // failed, so we can't just push this right up to the start of get_mset().
     if (usual(stats->collection_size != 0)) {
-	// FIXME: needs term-dep. stats.
+	// FIXME: needs term-dependent stats.
 	freqs = or_pl->get_termfreq_est_using_stats(*stats);
     }
     wt->init_(*stats, qlen, factor,
@@ -308,7 +305,6 @@ LocalSubMatch::open_post_list(const string& term,
 	    // Delay initialising the actual weight object, so that we can
 	    // gather stats for the terms lazily expanded from a wildcard
 	    // (needed for the remote database case).
-cerr << getpid() << ": Lazyweight created for term '" << term << "'" << endl;
 	    wt = new LazyWeight(pl, wt, stats, qlen, wqf, factor);
 	}
 	pl->set_termweight(wt);
