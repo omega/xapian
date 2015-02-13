@@ -68,6 +68,17 @@ class RSet;
 
 /** Class to hold statistics for a given collection. */
 class Weight::Internal {
+#ifdef XAPIAN_ASSERTIONS
+    /** Number of sub-databases. */
+    size_t subdbs;
+
+    /** True if we've finalised the stats.
+     *
+     *  Used for assertions.
+     */
+    mutable bool finalised;
+#endif
+
   public:
     /** Total length of all documents in the collection. */
     totlen_t total_length;
@@ -98,7 +109,11 @@ class Weight::Internal {
     std::map<std::string, TermFreqs> termfreqs;
 
     Internal()
-	: total_length(0), collection_size(0), rset_size(0),
+	:
+#ifdef XAPIAN_ASSERTIONS
+	  subdbs(0), finalised(false),
+#endif
+	  total_length(0), collection_size(0), rset_size(0),
 	  total_term_count(0), have_max_part(false) { }
 
     /** Add in the supplied statistics from a sub-database.
@@ -109,6 +124,7 @@ class Weight::Internal {
     Internal & operator +=(const Internal & inc);
 
     void set_query(const Xapian::Query &query_) {
+	AssertEq(subdbs, 0);
 	query = query_;
     }
 
@@ -131,6 +147,9 @@ class Weight::Internal {
 		   Xapian::doccount & termfreq,
 		   Xapian::doccount & reltermfreq,
 		   Xapian::termcount & collfreq) const {
+#ifdef XAPIAN_ASSERTIONS
+	finalised = true;
+#endif
 	// We pass an empty std::string for term when calculating the extra
 	// weight.
 	if (term.empty()) {
@@ -162,6 +181,9 @@ class Weight::Internal {
 
     /// Get the termweight.
     bool get_termweight(const std::string & term, double & termweight) {
+#ifdef XAPIAN_ASSERTIONS
+	finalised = true;
+#endif
 	termweight = 0.0;
 	if (term.empty()) {
 	    return false;
@@ -186,12 +208,18 @@ class Weight::Internal {
     }
 
     Xapian::doclength get_average_length() const {
+#ifdef XAPIAN_ASSERTIONS
+	finalised = true;
+#endif
 	if (rare(collection_size == 0)) return 0;
 	return Xapian::doclength(total_length) / collection_size;
     }
 
     /** Set the "bounds" stats from Database @a db. */
-    void set_bounds_from_db(const Xapian::Database &db_) { db = db_; }
+    void set_bounds_from_db(const Xapian::Database &db_) {
+	Assert(!finalised);
+	db = db_;
+    }
 
     /// Return a std::string describing this object.
     std::string get_description() const;

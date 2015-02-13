@@ -54,6 +54,10 @@ namespace Xapian {
 Weight::Internal &
 Weight::Internal::operator +=(const Weight::Internal & inc)
 {
+#ifdef XAPIAN_ASSERTIONS
+    Assert(!finalised);
+    subdbs += inc.subdbs;
+#endif
     total_length += inc.total_length;
     collection_size += inc.collection_size;
     rset_size += inc.rset_size;
@@ -71,6 +75,10 @@ void
 Weight::Internal::accumulate_stats(const Xapian::Database::Internal &subdb,
 				   const Xapian::RSet &rset)
 {
+#ifdef XAPIAN_ASSERTIONS
+    Assert(!finalised);
+    ++subdbs;
+#endif
     total_length += subdb.get_total_length();
     collection_size += subdb.get_doccount();
     rset_size += rset.size();
@@ -122,6 +130,12 @@ Weight::Internal::get_description() const
     desc += str(rset_size);
     desc += ", total_term_count=";
     desc += str(total_term_count);
+#ifdef XAPIAN_ASSERTIONS
+    desc += ", subdbs=";
+    desc += str(subdbs);
+    desc += ", finalised=";
+    desc += str(finalised);
+#endif
     desc += ", termfreqs={";
     map<string, TermFreqs>::const_iterator i;
     for (i = termfreqs.begin(); i != termfreqs.end(); ++i) {
