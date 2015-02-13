@@ -895,7 +895,6 @@ QueryWildcard::postlist(QueryOptimiser * qopt, double factor) const
 
     // We build an OP_OR tree for OP_SYNONYM and then wrap it in a
     // SynonymPostList, which supplies the weights.
-    // FIXME: it looks like this uses the stats
     PostingIterator::Internal * r = qopt->make_synonym_postlist(pl, factor);
     RETURN(r);
 }

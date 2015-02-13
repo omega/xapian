@@ -228,8 +228,6 @@ LocalSubMatch::make_synonym_postlist(PostList * or_pl, MultiMatch * matcher,
     LOGVALUE(MATCH, or_pl->get_termfreq_est());
     Xapian::termcount len_lb = db->get_doclength_lower_bound();
     AutoPtr<SynonymPostList> res(new SynonymPostList(or_pl, matcher, len_lb));
-
-    // FIXME: do this part below later?
     AutoPtr<Xapian::Weight> wt(wt_factory->clone());
 
     TermFreqs freqs;
@@ -239,7 +237,6 @@ LocalSubMatch::make_synonym_postlist(PostList * or_pl, MultiMatch * matcher,
     // we need to catch the case where all the non-empty subdatabases have
     // failed, so we can't just push this right up to the start of get_mset().
     if (usual(stats->collection_size != 0)) {
-	// FIXME: needs term-dependent stats.
 	freqs = or_pl->get_termfreq_est_using_stats(*stats);
     }
     wt->init_(*stats, qlen, factor,
