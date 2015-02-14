@@ -252,16 +252,16 @@ read_start_of_chunk(const char ** posptr,
 static inline
 unsigned get_max_bytes(unsigned n)
 {
-	if (n== 0) {
-		///we need at least one byte
-		return 1;
-	}
-	unsigned l=0;
-	while (n) {
-		l++;
-		n >>= 8;
-	}
-	return l;
+    if (n == 0) {
+	// we need at least one byte
+	return 1;
+    }
+    unsigned l=0;
+    while (n) {
+	l++;
+	n >>= 8;
+    }
+    return l;
 }
 
 
@@ -669,539 +669,526 @@ void GlassPostList::read_number_of_entries(const char ** posptr,
 /* @pos_ : a pointer to the end of the header of the chunk.
  * @end_ : a pointer to the end of the chunk.
  * @first_did_in_chunk_ : first doc id in this chunk */
-FixedWidthChunk::FixedWidthChunk( map<Xapian::docid,Xapian::termcount>::const_iterator pl_start_, 
-								 map<Xapian::docid,Xapian::termcount>::const_iterator pl_end_)
-								 : pl_start(pl_start_), pl_end(pl_end_)
+FixedWidthChunk::FixedWidthChunk(map<Xapian::docid,Xapian::termcount>::const_iterator pl_start_,
+				 map<Xapian::docid,Xapian::termcount>::const_iterator pl_end_)
+     : pl_start(pl_start_), pl_end(pl_end_)
 {}
 
 ///encode the post list
-bool 
+bool
 FixedWidthChunk::encode(string& desired_chunk)
 {
-	if (pl_start == pl_end) {
-		//the map is empty.
-		LOGLINE( DB, "Desired postlist is empty!" );
-		return false;
+    if (pl_start == pl_end) {
+	//the map is empty.
+	LOGLINE( DB, "Desired postlist is empty!" );
+	return false;
+    }
+
+    /* we use @it to go through the map,
+     * if we aren't in continuous block, we will encode doc id and doc length normally
+     * but if we are, we do some special operations,
+     * and apply fixed width format.
+     * @start_pos : it tracks the start of the continuous block we are in currently.
+     * @docid_before_start_pos : doc id before current continuous block */
+    map<Xapian::docid,Xapian::termcount>::const_iterator it = pl_start, start_pos;
+    Xapian::docid docid_before_start_pos = it->first;
+
+    //go throuth the whole map
+    while (it != pl_end) {
+	unsigned length_contiguous = 1;
+	Xapian::docid last_docid = it->first, cur_docid = 0;
+
+	//number of bytes to encode a length.
+	unsigned max_bytes = get_max_bytes(it->second);
+
+	/* Since different number of bytes is needed for different length
+	 * and we must select the max number of bytes
+	 * to make sure all lengths in this continuous block can be encoded,
+	 * some bytes may be wasted.
+	 * @used_bytes: number of bytes in all
+	 * @good_bytes: number of bytes which isn't wasted.
+	 * We require the ratio good_bytes/used_bytes must be bigger than a certain value,
+	 * in case much space is wasted. */
+	unsigned used_bytes = 0;
+	unsigned good_bytes = 0;
+
+	start_pos = it;
+	it++;
+	while (it != pl_end) {
+	    cur_docid = it->first;
+
+	    //number of bytes to encode current doc length
+	    unsigned cur_bytes = get_max_bytes(it->second);
+	    if (cur_docid != last_docid+1 || cur_bytes > max_bytes) {
+		/* if current id isn't continuous with last id,
+		 * or the number of bytes we need to store this doc length
+		 * is bigger than the max bytes needed in this continuous block,
+		 * we don't encode current doc id into current block. */
+		break;
+	    }
+
+	    /* used_bytes is all bytes to be used,
+	     * but only @cur_bytes isn't wasted. */
+	    used_bytes += max_bytes;
+	    good_bytes += cur_bytes;
+	    if ((double)good_bytes/used_bytes < DOCLEN_CHUNK_MIN_GOOD_BYTES_RATIO) {
+		/* the ratio is too small, which means too much space is wasted,
+		 * so we will start a new block. */
+		used_bytes = 0;
+		good_bytes = 0;
+		break;
+	    }
+
+	    length_contiguous++;
+	    last_docid = cur_docid;
+	    it++;
 	}
 
-	/* we use @it to go through the map, 
-	 * if we aren't in continuous block, we will encode doc id and doc length normally
-	 * but if we are, we do some special operations, 
-	 * and apply fixed width format. 
-	 * @start_pos : it tracks the start of the continuous block we are in currently. 
-	 * @docid_before_start_pos : doc id before current continuous block */
-	map<Xapian::docid,Xapian::termcount>::const_iterator it = pl_start, start_pos;
-	Xapian::docid docid_before_start_pos = it->first;
+	if (length_contiguous > DOCLEN_CHUNK_MIN_CONTIGUOUS_LENGTH) {
+	    //this block is long enough, fixed width format will be used.
 
-	//go throuth the whole map
-	while (it != pl_end)
-	{
-		unsigned length_contiguous = 1;
-		Xapian::docid last_docid = it->first, cur_docid = 0;
+	    //an indicator indicating the start of fixed width format chunk
+	    pack_uint(desired_chunk, SEPERATOR);
 
-		//number of bytes to encode a length.
-		unsigned max_bytes = get_max_bytes(it->second);
+	    //the delta of doc id
+	    pack_uint(desired_chunk, start_pos->first-docid_before_start_pos);
 
-		/* Since different number of bytes is needed for different length
-		 * and we must select the max number of bytes
-		 * to make sure all lengths in this continuous block can be encoded, 
-		 * some bytes may be wasted. 
-		 * @used_bytes: number of bytes in all
-		 * @good_bytes: number of bytes which isn't wasted.
-		 * We require the ratio good_bytes/used_bytes must be bigger than a certain value,
-		 * in case much space is wasted. */
-		unsigned used_bytes = 0;
-		unsigned good_bytes = 0;
+	    //the length of the block
+	    pack_uint_in_bytes(length_contiguous, 2, desired_chunk);
 
-		start_pos = it;
-		it++;
-		while (it != pl_end)
-		{
-			cur_docid = it->first;
+	    //number of bytes to encode each doc length in this block
+	    pack_uint_in_bytes(max_bytes, 1, desired_chunk);
 
-			//number of bytes to encode current doc length
-			unsigned cur_bytes = get_max_bytes(it->second);
-			if (cur_docid != last_docid+1 || cur_bytes > max_bytes) {
-				/* if current id isn't continuous with last id,
-				 * or the number of bytes we need to store this doc length 
-				 * is bigger than the max bytes needed in this continuous block,
-				 * we don't encode current doc id into current block. */
-				break;
-			}
+	    while (start_pos != it) {
+		pack_uint_in_bytes(start_pos->second, max_bytes, desired_chunk);
+		docid_before_start_pos = start_pos->first;
+		start_pos++;
+	    }
+	} else {
+	    //this block isn't long enough, we encode it normally.
+	    while (start_pos != it) {
+		//the delta of doc id
+		pack_uint(desired_chunk, start_pos->first-docid_before_start_pos);
 
-			/* used_bytes is all bytes to be used,
-			 * but only @cur_bytes isn't wasted. */
-			used_bytes += max_bytes;
-			good_bytes += cur_bytes;
-			if ((double)good_bytes/used_bytes < DOCLEN_CHUNK_MIN_GOOD_BYTES_RATIO) {
-				/* the ratio is too small, which means too much space is wasted,
-				 * so we will start a new block. */
-				used_bytes = 0;
-				good_bytes = 0;
-				break;
-			}
-
-			length_contiguous++;
-			last_docid = cur_docid;
-			it++;
-		}
-
-		if (length_contiguous > DOCLEN_CHUNK_MIN_CONTIGUOUS_LENGTH) {
-			//this block is long enough, fixed width format will be used.
-
-			//an indicator indicating the start of fixed width format chunk
-			pack_uint(desired_chunk, SEPERATOR);
-
-			//the delta of doc id
-			pack_uint(desired_chunk, start_pos->first-docid_before_start_pos);
-
-			//the length of the block
-			pack_uint_in_bytes(length_contiguous, 2, desired_chunk);
-			
-			//number of bytes to encode each doc length in this block
-			pack_uint_in_bytes(max_bytes, 1, desired_chunk);
-
-			while (start_pos != it) {
-				pack_uint_in_bytes(start_pos->second, max_bytes, desired_chunk);
-				docid_before_start_pos = start_pos->first;
-				start_pos++;
-			}
-		} else {
-			//this block isn't long enough, we encode it normally.
-			while (start_pos != it)
-			{
-				//the delta of doc id
-				pack_uint(desired_chunk, start_pos->first-docid_before_start_pos);
-
-				//the doc length
-				pack_uint(desired_chunk, start_pos->second);
-				docid_before_start_pos = start_pos->first;
-				start_pos++;
-			}
-		}
-
+		//the doc length
+		pack_uint(desired_chunk, start_pos->second);
+		docid_before_start_pos = start_pos->first;
+		start_pos++;
+	    }
 	}
-	return true;
+
+    }
+    return true;
 }
 
-/* move to next did in the chunk. 
+/* move to next did in the chunk.
  * If no more did, set is_at_end=true. */
-bool 
+bool
 FixedWidthChunkReader::next()
 {
-	LOGCALL(DB, bool, "FixedWidthChunkReader::next", NO_ARGS);
-	if (is_at_end) {
-		RETURN(false);
+    LOGCALL(DB, bool, "FixedWidthChunkReader::next", NO_ARGS);
+    if (is_at_end) {
+	RETURN(false);
+    }
+    if (pos == end) {
+	//have run out the chunk
+	is_at_end = true;
+	RETURN(false);
+    }
+    if (is_in_block && len_info) {
+	//we are in a continuous block and there are some entries haven't been read in this block
+
+	//the delta of doc id in continuous block is always 1
+	cur_did++;
+
+	//number of entries decreases
+	len_info--;
+	if (len_info == 0) {
+	    //all entries in this chunk have been read, so we aren't in a continuous block now
+	    is_in_block = false;
 	}
-	if (pos == end) {
-		//have run out the chunk
-		is_at_end = true;
-		RETURN(false);
+	//get doc length
+	unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
+	RETURN(true);
+    }
+
+    //we aren't in a continuous block
+    Xapian::docid incre_did = 0;
+
+    //store the start of a continuous block
+    pos_of_block = pos;
+
+    //get the increment of doc id
+    unpack_uint(&pos, end, &incre_did);
+    if (incre_did != SEPERATOR)	{
+	//we are still in normal format
+	is_in_block = false;
+	cur_did += incre_did;
+	unpack_uint(&pos, end, &cur_length);
+	RETURN(true);
+    }
+
+    //we will go into fixed width format
+
+    //we are in a continuous block now
+    is_in_block = true;
+    unpack_uint(&pos, end, &incre_did);
+
+    //get basic info of the continuous block
+    unpack_uint_in_bytes(&pos, 2, &len_info);
+    unpack_uint_in_bytes(&pos, 1, &bytes_info);
+
+    //store the doc id before this block
+    did_before_block = cur_did;
+
+    //get first doc id in this block
+    cur_did += incre_did;
+
+    //get first doc length in this block
+    unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
+    len_info--;
+    if (len_info == 0) {
+	// if there is no other entries, we have run out the block
+	is_in_block = false;
+    }
+    RETURN(true);
+}
+
+
+/* jump to desired did,
+ * if it fails, it will arrive at the exact did just after @desired_did */
+bool
+FixedWidthChunkReader::jump_to(Xapian::docid desired_did)
+{
+    LOGCALL(DB, bool, "FixedWidthChunkReader::jump_to", desired_did);
+
+    if (cur_did == desired_did) {
+	RETURN(true);
+    }
+    if (is_in_block) {
+	/* we are in a continuous block,
+	 * if desired doc id is smaller than the doc id just before this block,
+	 * we should go back to the start of the whole chunk,
+	 * otherwise, we just go back to the start of this continuous block. */
+	if (did_before_block >= desired_did) {
+	    pos = ori_pos;
+	    cur_did = first_did_in_chunk;
+	} else {
+	    pos = pos_of_block;
+	    cur_did = did_before_block;
 	}
-	if (is_in_block && len_info) {
-		//we are in a continuous block and there are some entries haven't been read in this block
+    } else if (cur_did > desired_did) {
+	/* we aren't in a continuous block,
+	 * and desired doc id is smaller than current doc id,
+	 * so we have to go back to the start of the whole chunk. */
+	pos = ori_pos;
+	cur_did = first_did_in_chunk;
+    }
 
-		//the delta of doc id in continuous block is always 1
-		cur_did++;
-
-		//number of entries decreases
-		len_info--;
-		if (len_info == 0) {
-			//all entries in this chunk have been read, so we aren't in a continuous block now
-			is_in_block = false;
-		}
-		//get doc length
-		unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
-		RETURN(true);
-	}
-
-	//we aren't in a continuous block
-	Xapian::docid incre_did = 0;
-
-	//store the start of a continuous block
+    Xapian::docid incre_did = 0;
+    while (pos!=end) {
+	//store the start of current block
 	pos_of_block = pos;
 
 	//get the increment of doc id
 	unpack_uint(&pos, end, &incre_did);
-	if (incre_did != SEPERATOR)	{
-		//we are still in normal format
-		is_in_block = false;
-		cur_did += incre_did;
-		unpack_uint(&pos, end, &cur_length);
+
+	if (incre_did != SEPERATOR) {
+	    // we aren't in a continuous block.
+	    is_in_block = false;
+	    cur_did += incre_did;
+	    unpack_uint(&pos, end, &cur_length);
+	    if (cur_did == desired_did) {
 		RETURN(true);
-	}
+	    }
+	    if (cur_did > desired_did) {
+		//In this case, desired doc id doesn't exist.
+		RETURN(false);
+	    }
+	    continue;
+	} else {
+	    // we are in a continuous block
+	    is_in_block = true;
 
-	//we will go into fixed width format
+	    //get the increment of doc id
+	    unpack_uint(&pos, end, &incre_did);
 
-	//we are in a continuous block now
-	is_in_block = true;
-	unpack_uint(&pos, end, &incre_did);
+	    //get the number of entries in this block
+	    unpack_uint_in_bytes(&pos, 2, &len_info);
 
-	//get basic info of the continuous block
-	unpack_uint_in_bytes(&pos, 2, &len_info);
-	unpack_uint_in_bytes(&pos, 1, &bytes_info);
+	    //get the fixed number of bytes in this block
+	    unpack_uint_in_bytes(&pos, 1, &bytes_info);
 
-	//store the doc id before this block
-	did_before_block = cur_did;
+	    //store the doc id just before this block
+	    did_before_block = cur_did;
 
-	//get first doc id in this block
-	cur_did += incre_did;
+	    cur_did += incre_did;
+	    if (desired_did < cur_did) {
+		//In this case, desired doc id doesn't exist.
+		unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
+		len_info--;
+		RETURN(false);
+	    }
 
-	//get first doc length in this block
-	unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
-	len_info--;
-	if (len_info == 0) {
-		// if there is no other entries, we have run out the block
-		is_in_block = false;
-	}
-	RETURN(true);
-}
+	    /* As the increment of doc id in a continuous block is always 1,
+	     * the min doc id in this block is @cur_did,
+	     * the max doc id in this block is @cur_did+@len_info-1. */
+	    if (desired_did <= cur_did+len_info-1) {
+		//desired doc id is in this block, move the pointer to the length of desired doc id
+		pos += bytes_info*(desired_did-cur_did);
+		unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
 
-
-/* jump to desired did, 
- * if it fails, it will arrive at the exact did just after @desired_did */
-bool 
-FixedWidthChunkReader::jump_to(Xapian::docid desired_did)
-{
-
-	LOGCALL(DB, bool, "FixedWidthChunkReader::jump_to", desired_did);
-
-	if (cur_did == desired_did)	{
-		RETURN(true);
-	}
-	if (is_in_block) {
-		/* we are in a continuous block, 
-		 * if desired doc id is smaller than the doc id just before this block,
-		 * we should go back to the start of the whole chunk,
-		 * otherwise, we just go back to the start of this continuous block. */
-		if (did_before_block >= desired_did) {
-			pos = ori_pos;
-			cur_did = first_did_in_chunk;
-		} else {
-			pos = pos_of_block;
-			cur_did = did_before_block;
-		}
-	} else if (cur_did > desired_did)
-	{
-		/* we aren't in a continuous block, 
-		 * and desired doc id is smaller than current doc id,
-		 * so we have to go back to the start of the whole chunk. */
-		pos = ori_pos;
-		cur_did = first_did_in_chunk;
-	}
-
-	Xapian::docid incre_did = 0;
-	while (pos!=end)
-	{
-		//store the start of current block
-		pos_of_block = pos;
-		
-		//get the increment of doc id
-		unpack_uint(&pos, end, &incre_did);
-
-		if (incre_did != SEPERATOR)	{
-			// we aren't in a continuous block.
-			is_in_block = false;
-			cur_did += incre_did;
-			unpack_uint(&pos, end, &cur_length);
-			if (cur_did == desired_did) {
-				RETURN(true);
-			}
-			if (cur_did > desired_did) {
-				//In this case, desired doc id doesn't exist.
-				RETURN(false);
-			}
-			continue;
-		} else {
-			// we are in a continuous block
-			is_in_block = true;
-
-			//get the increment of doc id
-			unpack_uint(&pos, end, &incre_did);
-
-			//get the number of entries in this block
-			unpack_uint_in_bytes(&pos, 2, &len_info);
-
-			//get the fixed number of bytes in this block
-			unpack_uint_in_bytes(&pos, 1, &bytes_info);
-
-			//store the doc id just before this block
-			did_before_block = cur_did;
-
-			cur_did += incre_did;
-			if (desired_did < cur_did) {
-				//In this case, desired doc id doesn't exist.
-				unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
-				len_info--;
-				RETURN(false);
-			}
-
-			/* As the increment of doc id in a continuous block is always 1,
-			 * the min doc id in this block is @cur_did,
-			 * the max doc id in this block is @cur_did+@len_info-1. */
-			if (desired_did <= cur_did+len_info-1) {
-				//desired doc id is in this block, move the pointer to the length of desired doc id
-				pos += bytes_info*(desired_did-cur_did);
-				unpack_uint_in_bytes(&pos, bytes_info, &cur_length);
-
-				//update number of remaining entries in this block 
-				len_info -= (desired_did-cur_did+1);
-				if (len_info == 0) {
-					//no other entries, we aren't in a block now
-					is_in_block = false;
-				}
-
-				//update current doc id
-				cur_did = desired_did;
-				RETURN(true);
-			}
-
-			//desired doc id isn't in this block, we just skip this block
-			pos += bytes_info*len_info;
-			cur_did += len_info-1;
-			is_in_block = false;
+		//update number of remaining entries in this block
+		len_info -= (desired_did-cur_did+1);
+		if (len_info == 0) {
+		    //no other entries, we aren't in a block now
+		    is_in_block = false;
 		}
 
+		//update current doc id
+		cur_did = desired_did;
+		RETURN(true);
+	    }
+
+	    //desired doc id isn't in this block, we just skip this block
+	    pos += bytes_info*len_info;
+	    cur_did += len_info-1;
+	    is_in_block = false;
 	}
-	RETURN(false);
+
+    }
+    RETURN(false);
 }
 
 //merge old map and new map, the @new_doclen is valid.
-bool 
+bool
 DoclenChunkWriter::get_new_doclen( )
 {
-	LOGCALL(DB, bool, "DoclenChunkWriter::get_new_doclen", NO_ARGS);
-	const char* pos = chunk_from.data();
-	const char* end = pos+chunk_from.size();
+    LOGCALL(DB, bool, "DoclenChunkWriter::get_new_doclen", NO_ARGS);
+    const char* pos = chunk_from.data();
+    const char* end = pos+chunk_from.size();
 
-	//deal with the header of the chunk
-	if (is_first_chunk) {
-		read_start_of_first_chunk(&pos, end, NULL, NULL);
+    //deal with the header of the chunk
+    if (is_first_chunk) {
+	read_start_of_first_chunk(&pos, end, NULL, NULL);
+    }
+    read_start_of_chunk(&pos, end, 0, &is_last_chunk);
+
+    if (pos == end) {
+	//original chunk is empty, we just do some deleting according to changes
+	LOGLINE( DB, "empty chunk!" );
+	map<Xapian::docid,Xapian::termcount>::const_iterator it = changes_start;
+	for (; it!=changes_end ; ++it) {
+	    //the doc length is -1, which means we should delete this doc id
+	    if (it->second != SEPERATOR) {
+		new_doclen.insert(new_doclen.end(), *it);
+	    }
 	}
-	read_start_of_chunk(&pos, end, 0, &is_last_chunk); 
+	if (new_doclen.empty()) {
+	    LOGLINE(DB, "new_doclen is empty! ");
+	    RETURN(false);
+	}
+    } else {
+	//read old map of <docid,length> from original chunk
+	Xapian::docid cur_did = 0, inc_did = 0;
+	Xapian::termcount doc_len = 0;
+	cur_did = first_did_in_chunk;
+	while (pos!=end) {
+	    //get the increment of the doc id
+	    unpack_uint(&pos, end, &inc_did);
+	    if (inc_did != SEPERATOR) {
+		//normal format
+		cur_did += inc_did;
+		unpack_uint(&pos, end, &doc_len);
+		new_doclen.insert(new_doclen.end(), make_pair<Xapian::docid,Xapian::termcount>(cur_did,doc_len));
+		continue;
+	    } else {
+		//fixed width format
+		unpack_uint(&pos, end, &inc_did);
+		unsigned len=0, bytes=0;
 
-	if (pos == end) {
-		//original chunk is empty, we just do some deleting according to changes
-		LOGLINE( DB, "empty chunk!" );
-		map<Xapian::docid,Xapian::termcount>::const_iterator it = changes_start;
-		for (; it!=changes_end ; ++it) {
-			//the doc length is -1, which means we should delete this doc id
-			if (it->second != SEPERATOR) {
-				new_doclen.insert(new_doclen.end(), *it);
-			}
-		}
-		if (new_doclen.empty()) {
-			LOGLINE(DB, "new_doclen is empty! ");
-			RETURN(false);
-		}
-	} else {
-		//read old map of <docid,length> from original chunk
-		Xapian::docid cur_did = 0, inc_did = 0;
-		Xapian::termcount doc_len = 0;
-		cur_did = first_did_in_chunk;
-		while (pos!=end)
-		{
-			//get the increment of the doc id
-			unpack_uint(&pos, end, &inc_did);
-			if (inc_did != SEPERATOR) {
-				//normal format
-				cur_did += inc_did;
-				unpack_uint(&pos, end, &doc_len);
-				new_doclen.insert(new_doclen.end(), make_pair<Xapian::docid,Xapian::termcount>(cur_did,doc_len));
-				continue;
-			} else {
-				//fixed width format
-				unpack_uint(&pos, end, &inc_did);
-				unsigned len=0, bytes=0;
+		//get the number of entries in this block
+		unpack_uint_in_bytes(&pos, 2, &len);
 
-				//get the number of entries in this block
-				unpack_uint_in_bytes(&pos, 2, &len);
+		//get the fixed number of bytes in this block
+		unpack_uint_in_bytes(&pos, 1, &bytes);
+		cur_did += inc_did;
+		while (len--) {
+		    unpack_uint_in_bytes(&pos, bytes, &doc_len);
+		    new_doclen.insert(new_doclen.end(), make_pair<Xapian::docid,Xapian::termcount>(cur_did,doc_len));
 
-				//get the fixed number of bytes in this block
-				unpack_uint_in_bytes(&pos, 1, &bytes);
-				cur_did += inc_did;
-				while (len--) {
-					unpack_uint_in_bytes(&pos, bytes, &doc_len);
-					new_doclen.insert(new_doclen.end(), make_pair<Xapian::docid,Xapian::termcount>(cur_did,doc_len));
-
-					//the increment of doc id in a continuous block is always 1
-					cur_did++;
-				}
-				
-				//just a compensation for the loop above
-				cur_did--;
-			}
-
+		    //the increment of doc id in a continuous block is always 1
+		    cur_did++;
 		}
 
-		LOGVALUE(DB, new_doclen.size());
-
-		/* merge old map with changes, get new map of <docid,length>
-		 * we can do this job in a more easy way, 
-		 * for example, new_doclen[chg_it->first]=chg_it->second, 
-		 * but it will cost more time.
-		 * the following code takes the advantages of a fact
-		 * that all elements in a map is in order. 
-		 * so we can merge these changes in a more efficient way. */
-		map<Xapian::docid,Xapian::termcount>::const_iterator chg_it = changes_start;
-		map<Xapian::docid,Xapian::termcount>::iterator ori_it = new_doclen.begin();
-
-		while (chg_it != changes_end)
-		{
-			while (chg_it->first > ori_it->first)
-			{
-				++ori_it;
-				if (ori_it == new_doclen.end()){
-					break;
-				}
-			}
-			if (ori_it == new_doclen.end()) {
-				while (chg_it != changes_end)
-				{
-                    if (chg_it->second == SEPERATOR) {
-                        ++chg_it;
-                        continue;
-                    }
-					new_doclen.insert(ori_it, *chg_it);
-					++chg_it;
-				}
-				break;
-			}
-			if (ori_it->first == chg_it->first)	{
-				if (chg_it->second != SEPERATOR) {
-					ori_it->second = chg_it->second;
-				} else {
-					new_doclen.erase(ori_it++);
-				}
-			} else if (chg_it->second != SEPERATOR) {
-                new_doclen.insert(ori_it, *chg_it);
-            }
-			++chg_it;
-		}
+		//just a compensation for the loop above
+		cur_did--;
+	    }
 
 	}
+
 	LOGVALUE(DB, new_doclen.size());
-	RETURN(true);
+
+	/* merge old map with changes, get new map of <docid,length>
+	 * we can do this job in a more easy way,
+	 * for example, new_doclen[chg_it->first]=chg_it->second,
+	 * but it will cost more time.
+	 * the following code takes the advantages of a fact
+	 * that all elements in a map is in order.
+	 * so we can merge these changes in a more efficient way. */
+	map<Xapian::docid,Xapian::termcount>::const_iterator chg_it = changes_start;
+	map<Xapian::docid,Xapian::termcount>::iterator ori_it = new_doclen.begin();
+
+	while (chg_it != changes_end) {
+	    while (chg_it->first > ori_it->first) {
+		++ori_it;
+		if (ori_it == new_doclen.end()){
+		    break;
+		}
+	    }
+	    if (ori_it == new_doclen.end()) {
+		while (chg_it != changes_end) {
+		    if (chg_it->second == SEPERATOR) {
+			++chg_it;
+			continue;
+		    }
+		    new_doclen.insert(ori_it, *chg_it);
+		    ++chg_it;
+		}
+		break;
+	    }
+	    if (ori_it->first == chg_it->first)	{
+		if (chg_it->second != SEPERATOR) {
+		    ori_it->second = chg_it->second;
+		} else {
+		    new_doclen.erase(ori_it++);
+		}
+	    } else if (chg_it->second != SEPERATOR) {
+		new_doclen.insert(ori_it, *chg_it);
+	    }
+	    ++chg_it;
+	}
+    }
+    LOGVALUE(DB, new_doclen.size());
+    RETURN(true);
 }
 
-bool 
+bool
 DoclenChunkWriter::merge_doclen_changes( )
 {
-	//get new map of <docid,length>
-	get_new_doclen();
+    //get new map of <docid,length>
+    get_new_doclen();
 
-	//build new chunk from new doclen map.
-	map<Xapian::docid,Xapian::termcount>::const_iterator start_pos, end_pos;
-	start_pos = end_pos = new_doclen.begin();
-	if (new_doclen.size() == 0) {
-		return true;
+    //build new chunk from new doclen map.
+    map<Xapian::docid,Xapian::termcount>::const_iterator start_pos, end_pos;
+    start_pos = end_pos = new_doclen.begin();
+    if (new_doclen.size() == 0) {
+	return true;
+    }
+
+    //If the number of entries in new doclen map is less than a certain value,
+    //one chunk is enough.
+    //Otherwise we need to split it into many chunks.
+    if (new_doclen.size() <= MAX_ENTRIES_IN_CHUNK) {
+	//only one chunk
+
+	string cur_chunk;
+	FixedWidthChunk fwc(new_doclen.begin(), new_doclen.end());
+
+	//make the standard header of the chunk
+	end_pos = new_doclen.end();
+	end_pos--;
+	string head_of_chunk = make_start_of_chunk(is_last_chunk,start_pos->first,end_pos->first);
+	cur_chunk = head_of_chunk+cur_chunk;
+
+	//encode new map<doc id, doc length>
+	fwc.encode(cur_chunk);
+
+	if (is_first_chunk) {
+	    //make the header for first chunk
+	    string head_of_first_chunk =
+		make_start_of_first_chunk(0, 0, start_pos->first);
+	    cur_chunk = head_of_first_chunk+cur_chunk;
 	}
 
+	//make key for this chunk
+	string cur_key;
+	if (!is_first_chunk) {
+	    cur_key = GlassPostListTable::make_key(string(), start_pos->first);
+	} else {
+	    cur_key = GlassPostListTable::make_key(string());
+	}
 
-	//If the number of entries in new doclen map is less than a certain value,
-	//one chunk is enough.
-	//Otherwise we need to split it into many chunks.
-	if (new_doclen.size() <= MAX_ENTRIES_IN_CHUNK) {
-		//only one chunk
-		
-		string cur_chunk;
-		FixedWidthChunk fwc(new_doclen.begin(), new_doclen.end());
+	//insert this chunk
+	postlist_table->add(cur_key,cur_chunk);
+    } else {
+	//we need more than one chunk
 
-		//make the standard header of the chunk
-		end_pos = new_doclen.end();
-		end_pos--;
-		string head_of_chunk = make_start_of_chunk(is_last_chunk,start_pos->first,end_pos->first);
-		cur_chunk = head_of_chunk+cur_chunk;
+	//track the number of entries in current chunk
+	int count = 0;
 
-		//encode new map<doc id, doc length>
+	bool is_done = false;
+	while (!is_done) {
+	    end_pos++;
+	    if (end_pos == new_doclen.end()) {
+		is_done = true;
+	    }
+	    count++;
+	    if (is_done || count == MAX_ENTRIES_IN_CHUNK) {
+		//current chunk is full, or no more entry.
+		string cur_chunk, cur_key;
+
+		//make standard header for this chunk
+		map<Xapian::docid,Xapian::termcount>::const_iterator it = end_pos;
+		it--;
+		if (end_pos==new_doclen.end() && is_last_chunk) {
+		    //this chunk is last chunk
+		    cur_chunk = make_start_of_chunk(true, start_pos->first, it->first);
+		} else {
+		    cur_chunk = make_start_of_chunk(false,start_pos->first, it->first);
+		}
+
+		FixedWidthChunk fwc(start_pos, end_pos);
 		fwc.encode(cur_chunk);
 
-		if (is_first_chunk) {
-			//make the header for first chunk
-			string head_of_first_chunk = 
-				make_start_of_first_chunk(0, 0, start_pos->first);
-			cur_chunk = head_of_first_chunk+cur_chunk;
-		}
-
-		//make key for this chunk
-		string cur_key;
-		if (!is_first_chunk) {
-			cur_key = BrassPostListTable::make_key(string(), start_pos->first);
+		if (start_pos==new_doclen.begin() && is_first_chunk) {
+		    //this chunk is first chunk
+		    //make header for first chunk
+		    string head_of_first_chunk = make_start_of_first_chunk(0, 0, start_pos->first);
+		    cur_chunk = head_of_first_chunk+cur_chunk;
+		    cur_key = postlist_table->make_key(string());
 		} else {
-			cur_key = BrassPostListTable::make_key(string());
+		    cur_key = postlist_table->make_key(string(), start_pos->first);
 		}
 
-		//insert this chunk
+		//insert current chunk
 		postlist_table->add(cur_key,cur_chunk);
-	} else {
-		//we need more than one chunk
 
-		//track the number of entries in current chunk
-		int count = 0;
-
-		bool is_done = false;
-		while (!is_done)
-		{
-			end_pos++;
-			if (end_pos==new_doclen.end()) {
-				is_done = true;
-			}
-			count++;
-			if (is_done || count == MAX_ENTRIES_IN_CHUNK) {
-				//current chunk is full, or no more entry. 
-				string cur_chunk, cur_key;
-
-				//make standard header for this chunk
-				map<Xapian::docid,Xapian::termcount>::const_iterator it = end_pos;
-				it--;
-				if (end_pos==new_doclen.end() && is_last_chunk) {
-					//this chunk is last chunk
-					cur_chunk = make_start_of_chunk(true, start_pos->first, it->first);
-				} else {
-					cur_chunk = make_start_of_chunk(false,start_pos->first, it->first);
-				}
-
-				FixedWidthChunk fwc(start_pos, end_pos);
-				fwc.encode(cur_chunk);
-
-				if (start_pos==new_doclen.begin() && is_first_chunk) {
-					//this chunk is first chunk
-					//make header for first chunk
-					string head_of_first_chunk = make_start_of_first_chunk(0, 0, start_pos->first);
-					cur_chunk = head_of_first_chunk+cur_chunk;
-					cur_key = postlist_table->make_key(string());
-				} else {
-					cur_key = postlist_table->make_key(string(), start_pos->first);
-				}
-
-				//insert current chunk
-				postlist_table->add(cur_key,cur_chunk);
-
-				count = 0;
-				start_pos = end_pos;
-			}
-		}
-	}			
-	return true;
+		count = 0;
+		start_pos = end_pos;
+	    }
+	}
+    }
+    return true;
 }
 
 
 /* This class is just a wrapper of FixedWidthChunkReader,
  * This class just deals with the header of the chunk. */
-DoclenChunkReader::DoclenChunkReader(const string& chunk_, bool is_first_chunk, 
-									 Xapian::docid first_did_in_chunk)
+DoclenChunkReader::DoclenChunkReader(const string& chunk_, bool is_first_chunk,
+				     Xapian::docid first_did_in_chunk)
 	: chunk(chunk_), p_fwcr(0)
 {
-	LOGCALL_CTOR(DB, "DoclenChunkReader", chunk_.size() | is_first_chunk | first_did_in_chunk);
-	const char* pos = chunk.data();
-	const char* end = pos+chunk.size();
-	if (is_first_chunk)	{
-		read_start_of_first_chunk(&pos, end, NULL, NULL);
-	}
-	bool is_last_chunk;
-	read_start_of_chunk(&pos, end, 0, &is_last_chunk);
-	LOGVALUE(DB,is_last_chunk);
-	p_fwcr.reset(new FixedWidthChunkReader(pos,end,first_did_in_chunk));
+    LOGCALL_CTOR(DB, "DoclenChunkReader", chunk_.size() | is_first_chunk | first_did_in_chunk);
+    const char* pos = chunk.data();
+    const char* end = pos+chunk.size();
+    if (is_first_chunk)	{
+	read_start_of_first_chunk(&pos, end, NULL, NULL);
+    }
+    bool is_last_chunk;
+    read_start_of_chunk(&pos, end, 0, &is_last_chunk);
+    LOGVALUE(DB,is_last_chunk);
+    p_fwcr.reset(new FixedWidthChunkReader(pos,end,first_did_in_chunk));
 }
 
 /** The format of a postlist is:
@@ -1235,7 +1222,7 @@ GlassPostList::GlassPostList(intrusive_ptr<const GlassDatabase> this_db_,
 	  is_doclen_list(term_.empty()?true:false)
 {
     LOGCALL_CTOR(DB, "GlassPostList", this_db_.get() | term_ | keep_reference);
-	LOGVALUE( DB, is_doclen_list );
+    LOGVALUE( DB, is_doclen_list );
     init();
 }
 
@@ -1251,7 +1238,7 @@ GlassPostList::GlassPostList(intrusive_ptr<const GlassDatabase> this_db_,
 	  is_doclen_list(term_.empty()?true:false)
 {
     LOGCALL_CTOR(DB, "GlassPostList", this_db_.get() | term_ | cursor_);
-	LOGVALUE( DB, is_doclen_list );
+    LOGVALUE( DB, is_doclen_list );
     init();
 }
 
@@ -1259,48 +1246,49 @@ void
 GlassPostList::init()
 {
     string key = GlassPostListTable::make_key(term);
-	int found = cursor->find_entry(key);
-	if (!found) {
-		LOGLINE(DB, "postlist for term not found");
-		number_of_entries = 0;
-		is_at_end = true;
-		pos = 0;
-		end = 0;
-		first_did_in_chunk = 0;
-		last_did_in_chunk = 0;
-		return;
-	}
-	cursor->read_tag();
-	pos = cursor->current_tag.data();
-	end = pos + cursor->current_tag.size();
+    int found = cursor->find_entry(key);
+    if (!found) {
+	LOGLINE(DB, "postlist for term not found");
+	number_of_entries = 0;
+	is_at_end = true;
+	pos = 0;
+	end = 0;
+	first_did_in_chunk = 0;
+	last_did_in_chunk = 0;
+	return;
+    }
+    cursor->read_tag();
+    pos = cursor->current_tag.data();
+    end = pos + cursor->current_tag.size();
 
-	is_first_chunk = true;
+    is_first_chunk = true;
 
-	did = read_start_of_first_chunk(&pos, end, &number_of_entries, NULL);
-	first_did_in_chunk = did;
-	last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk, &is_last_chunk);
-	if (!is_doclen_list) {
-		read_wdf(&pos, end, &wdf);
-		p_doclen_chunk_reader.reset(0);
-	}
-	if (is_doclen_list)	{
-		LOGLINE(DB, "This brass_postlist is for doclen info.");
-		p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,true,first_did_in_chunk));
-		did = p_doclen_chunk_reader->get_docid();
-		wdf = p_doclen_chunk_reader->get_doclen();
-		is_at_end = p_doclen_chunk_reader->at_end();
-		LOGVALUE(DB, did);
-		LOGVALUE(DB, wdf);
-		LOGVALUE(DB, is_at_end);
-	}
+    did = read_start_of_first_chunk(&pos, end, &number_of_entries, NULL);
+    first_did_in_chunk = did;
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
+					    &is_last_chunk);
+    if (!is_doclen_list) {
+	read_wdf(&pos, end, &wdf);
+	p_doclen_chunk_reader.reset(0);
+    }
+    if (is_doclen_list)	{
+	LOGLINE(DB, "This glass_postlist is for doclen info.");
+	p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,true,first_did_in_chunk));
+	did = p_doclen_chunk_reader->get_docid();
+	wdf = p_doclen_chunk_reader->get_doclen();
+	is_at_end = p_doclen_chunk_reader->at_end();
+	LOGVALUE(DB, did);
+	LOGVALUE(DB, wdf);
+	LOGVALUE(DB, is_at_end);
+    }
 
-	LOGLINE(DB, "Initial docid " << did);
+    LOGLINE(DB, "Initial docid " << did);
 }
 
 GlassPostList::~GlassPostList()
 {
     LOGCALL_DTOR(DB, "GlassPostList");
-	LOGVALUE(DB, is_doclen_list);
+    LOGVALUE(DB, is_doclen_list);
 }
 
 LeafPostList *
@@ -1336,20 +1324,20 @@ bool
 GlassPostList::next_in_chunk()
 {
     LOGCALL(DB, bool, "GlassPostList::next_in_chunk", NO_ARGS);
-	if (is_doclen_list) {
-		LOGLINE(DB, "next_in_chunk() for doclen list");
-		if (p_doclen_chunk_reader->next()) {
-			did = p_doclen_chunk_reader->get_docid();
-			wdf = p_doclen_chunk_reader->get_doclen();
-			is_at_end = p_doclen_chunk_reader->at_end();
-			LOGVALUE(DB, did);
-			LOGVALUE(DB, wdf);
-			LOGVALUE(DB, is_at_end);
-			RETURN(true);
-		}
-		is_at_end = p_doclen_chunk_reader->at_end();
-		RETURN(false);
+    if (is_doclen_list) {
+	LOGLINE(DB, "next_in_chunk() for doclen list");
+	if (p_doclen_chunk_reader->next()) {
+	    did = p_doclen_chunk_reader->get_docid();
+	    wdf = p_doclen_chunk_reader->get_doclen();
+	    is_at_end = p_doclen_chunk_reader->at_end();
+	    LOGVALUE(DB, did);
+	    LOGVALUE(DB, wdf);
+	    LOGVALUE(DB, is_at_end);
+	    RETURN(true);
 	}
+	is_at_end = p_doclen_chunk_reader->at_end();
+	RETURN(false);
+    }
     if (pos == end) RETURN(false);
 
     read_did_increase(&pos, end, &did);
@@ -1372,57 +1360,56 @@ GlassPostList::next_chunk()
 	return;
     }
 
-	cursor->next();
-	if (cursor->after_end()) {
-		is_at_end = true;
-		throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
-			term + "'");
-	}
-	const char * keypos = cursor->current_key.data();
-	const char * keyend = keypos + cursor->current_key.size();
-	// Check we're still in same postlist
-	if (!check_tname_in_key_lite(&keypos, keyend, term)) {
-		is_at_end = true;
-		throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
-			term + "'");
-	}
+    cursor->next();
+    if (cursor->after_end()) {
+	is_at_end = true;
+	throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
+				     term + "'");
+    }
+    const char * keypos = cursor->current_key.data();
+    const char * keyend = keypos + cursor->current_key.size();
+    // Check we're still in same postlist
+    if (!check_tname_in_key_lite(&keypos, keyend, term)) {
+	is_at_end = true;
+	throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
+				     term + "'");
+    }
 
-	is_first_chunk = false;
+    is_first_chunk = false;
 
-	Xapian::docid newdid;
-	if (!unpack_uint_preserving_sort(&keypos, keyend, &newdid)) {
-		report_read_error(keypos);
-	}
-	if (newdid <= did) {
-		throw Xapian::DatabaseCorruptError("Document ID in new chunk of postlist (" +
-			str(newdid) +
-			") is not greater than final document ID in previous chunk (" +
-			str(did) + ")");
-	}
-	did = newdid;
+    Xapian::docid newdid;
+    if (!unpack_uint_preserving_sort(&keypos, keyend, &newdid)) {
+	report_read_error(keypos);
+    }
+    if (newdid <= did) {
+	throw Xapian::DatabaseCorruptError("Document ID in new chunk of postlist (" +
+		str(newdid) +
+		") is not greater than final document ID in previous chunk (" +
+		str(did) + ")");
+    }
+    did = newdid;
 
-	cursor->read_tag();
-	pos = cursor->current_tag.data();
-	end = pos + cursor->current_tag.size();
+    cursor->read_tag();
+    pos = cursor->current_tag.data();
+    end = pos + cursor->current_tag.size();
 
-	first_did_in_chunk = did;
-	last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
-		&is_last_chunk);
-	if (!is_doclen_list) {
-		read_wdf(&pos, end, &wdf);
-	}
-	if (is_doclen_list) {
-		LOGLINE(DB, "next_chunk() for doclen list");
-		LOGLINE(DB, "build new doclen_chunk_reader"); 
-		p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,is_first_chunk,first_did_in_chunk));
-		did = p_doclen_chunk_reader->get_docid();
-		wdf = p_doclen_chunk_reader->get_doclen();
-		is_at_end = p_doclen_chunk_reader->at_end();
-		LOGVALUE(DB, did);
-		LOGVALUE(DB, wdf);
-		LOGVALUE(DB, is_at_end);
-	}
-
+    first_did_in_chunk = did;
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
+					    &is_last_chunk);
+    if (!is_doclen_list) {
+	read_wdf(&pos, end, &wdf);
+    }
+    if (is_doclen_list) {
+	LOGLINE(DB, "next_chunk() for doclen list");
+	LOGLINE(DB, "build new doclen_chunk_reader");
+	p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,is_first_chunk,first_did_in_chunk));
+	did = p_doclen_chunk_reader->get_docid();
+	wdf = p_doclen_chunk_reader->get_doclen();
+	is_at_end = p_doclen_chunk_reader->at_end();
+	LOGVALUE(DB, did);
+	LOGVALUE(DB, wdf);
+	LOGVALUE(DB, is_at_end);
+    }
 }
 
 PositionList *
@@ -1492,7 +1479,7 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
     }
     is_at_end = false;
 
-	is_first_chunk = keypos==keyend;
+    is_first_chunk = keypos==keyend;
 
     cursor->read_tag();
     pos = cursor->current_tag.data();
@@ -1515,21 +1502,21 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
     }
 
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk, &is_last_chunk);
-	if (!is_doclen_list) {
-		read_wdf(&pos, end, &wdf);
-	}
-	if (is_doclen_list) {
-		LOGLINE(DB, "build new doclen_chunk_reader " ); 
-		p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,is_first_chunk,first_did_in_chunk));
-		did = p_doclen_chunk_reader->get_docid();
-		wdf = p_doclen_chunk_reader->get_doclen();
-		is_at_end = p_doclen_chunk_reader->at_end();
-		LOGVALUE(DB, did);
-		LOGVALUE(DB, wdf);
-		LOGVALUE(DB, is_at_end);
-	}
-    
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
+					    &is_last_chunk);
+    if (!is_doclen_list) {
+	read_wdf(&pos, end, &wdf);
+    }
+    if (is_doclen_list) {
+	LOGLINE(DB, "build new doclen_chunk_reader " );
+	p_doclen_chunk_reader.reset(new DoclenChunkReader(cursor->current_tag,is_first_chunk,first_did_in_chunk));
+	did = p_doclen_chunk_reader->get_docid();
+	wdf = p_doclen_chunk_reader->get_doclen();
+	is_at_end = p_doclen_chunk_reader->at_end();
+	LOGVALUE(DB, did);
+	LOGVALUE(DB, wdf);
+	LOGVALUE(DB, is_at_end);
+    }
 
     // Possible, since desired_did might be after end of this chunk and before
     // the next.
@@ -1567,13 +1554,13 @@ GlassPostList::skip_to(Xapian::docid desired_did, double w_min)
 {
     LOGCALL(DB, PostList *, "GlassPostList::skip_to", desired_did | w_min);
     (void)w_min; // no warning
-	if (is_doclen_list)	{
-		// If current chunk is doc length chunk, 
-		// you should call jump_to rather than skip_to. 
-		LOGLINE( DB, "skip_to isn't designed for doclen list!" );
-		jump_to(desired_did);
-		RETURN(NULL);
-	}
+    if (is_doclen_list) {
+	// If current chunk is doc length chunk,
+	// you should call jump_to rather than skip_to.
+	LOGLINE( DB, "skip_to isn't designed for doclen list!" );
+	jump_to(desired_did);
+	RETURN(NULL);
+    }
     // We've started now - if we hadn't already, we're already positioned
     // at start so there's no need to actually do anything.
     have_started = true;
@@ -1612,39 +1599,39 @@ GlassPostList::jump_to(Xapian::docid desired_did)
     // at start so there's no need to actually do anything.
     have_started = true;
 
-	// If the list is empty, give up right away.
-	if (pos == 0) RETURN(false);
+    // If the list is empty, give up right away.
+    if (pos == 0) RETURN(false);
 
-	// Move to correct chunk, or reload the current chunk to go backwards in it
-	// (FIXME: perhaps handle the latter case more elegantly, though it won't
-	// happen during sequential access which is most common).
-	if (is_at_end || !current_chunk_contains(desired_did) || desired_did < did) {
-		// Clear is_at_end flag since we can rewind.
-		is_at_end = false;
+    // Move to correct chunk, or reload the current chunk to go backwards in it
+    // (FIXME: perhaps handle the latter case more elegantly, though it won't
+    // happen during sequential access which is most common).
+    if (is_at_end || !current_chunk_contains(desired_did) || desired_did < did) {
+	// Clear is_at_end flag since we can rewind.
+	is_at_end = false;
 
-		LOGLINE( DB, "get exact chunk for jump_to " );
-		move_to_chunk_containing(desired_did);
-		// Might be at_end now, so we need to check before trying to move
-		// forward in chunk.
-		if (is_at_end) RETURN(false);
-	}
+	LOGLINE( DB, "get exact chunk for jump_to " );
+	move_to_chunk_containing(desired_did);
+	// Might be at_end now, so we need to check before trying to move
+	// forward in chunk.
+	if (is_at_end) RETURN(false);
+    }
 
-	// Move to correct position in chunk.
-	wdf = p_doclen_chunk_reader->get_doclen(desired_did);
-	is_at_end = p_doclen_chunk_reader->at_end();
-	if (wdf == (Xapian::termcount)-1) {
-		LOGLINE(DB, "No doc with desired_id!");
-		wdf = p_doclen_chunk_reader->get_doclen();
-		did = p_doclen_chunk_reader->get_docid();
-		LOGVALUE(DB,wdf);
-		LOGVALUE(DB,did);
-		RETURN(false);
-	}
+    // Move to correct position in chunk.
+    wdf = p_doclen_chunk_reader->get_doclen(desired_did);
+    is_at_end = p_doclen_chunk_reader->at_end();
+    if (wdf == (Xapian::termcount)-1) {
+	LOGLINE(DB, "No doc with desired_id!");
+	wdf = p_doclen_chunk_reader->get_doclen();
 	did = p_doclen_chunk_reader->get_docid();
-	LOGVALUE(DB,did);
 	LOGVALUE(DB,wdf);
-	LOGVALUE(DB,is_at_end);
-	RETURN(true);
+	LOGVALUE(DB,did);
+	RETURN(false);
+    }
+    did = p_doclen_chunk_reader->get_docid();
+    LOGVALUE(DB,did);
+    LOGVALUE(DB,wdf);
+    LOGVALUE(DB,is_at_end);
+    RETURN(true);
 }
 
 string
@@ -1665,12 +1652,12 @@ GlassPostListTable::get_chunk(const string &tname,
 {
     LOGCALL(DB, Xapian::docid, "GlassPostListTable::get_chunk", tname | did | adding | from | to);
 
-	if (tname.empty()) {
-		// When current chunk is for doc length, this function shouldn't be called.
-		*from = NULL;
-		*to = NULL;
-		RETURN(Xapian::docid(-1));
-	}
+    if (tname.empty()) {
+	// When current chunk is for doc length, this function shouldn't be called.
+	*from = NULL;
+	*to = NULL;
+	RETURN(Xapian::docid(-1));
+    }
 
     // Get chunk containing entry
     string key = make_key(tname, did);
@@ -1755,96 +1742,93 @@ GlassPostListTable::merge_doclen_changes(const map<Xapian::docid, Xapian::termco
 {
     LOGCALL_VOID(DB, "GlassPostListTable::merge_doclen_changes", doclens);
 
-	// The cursor in the doclen_pl will no longer be valid, so reset it.
-	doclen_pl.reset(0);
+    // The cursor in the doclen_pl will no longer be valid, so reset it.
+    doclen_pl.reset(0);
 
-	LOGVALUE(DB, doclens.size());
-	if (doclens.empty()) return;
+    LOGVALUE(DB, doclens.size());
+    if (doclens.empty()) return;
 
-	// Ensure there's a first chunk.
-	string current_key = make_key(string());
+    // Ensure there's a first chunk.
+    string current_key = make_key(string());
+    if (!key_exists(current_key)) {
+	LOGLINE(DB, "Adding dummy first chunk");
+	string newtag = make_start_of_first_chunk(0, 0, 0);
+	newtag += make_start_of_chunk(true, 0, 0);
+	add(current_key, newtag);
+    }
 
-	if (!key_exists(current_key)) {
-		LOGLINE(DB, "Adding dummy first chunk");
-		string newtag = make_start_of_first_chunk(0, 0, 0);
-		newtag += make_start_of_chunk(true, 0, 0);
-		add(current_key, newtag);
+    map<Xapian::docid, Xapian::termcount>::const_iterator it, pre_it;
+    pre_it = it = doclens.begin();
+    Assert(it != doclens.end());
+
+    LOGVALUE(DB, doclens.size());
+    while (it != doclens.end()) {
+	string key = make_key(string(), it->first);
+
+	AutoPtr<GlassCursor> cursor(cursor_get());
+
+	(void)cursor->find_entry(key);
+	Assert(!cursor->after_end());
+
+	const char * keypos = cursor->current_key.data();
+	const char * keyend = keypos + cursor->current_key.size();
+
+	check_tname_in_key(&keypos, keyend, string());
+
+	bool is_first_chunk = (keypos == keyend);
+	LOGVALUE(DB, is_first_chunk);
+
+	cursor->read_tag();
+
+	//Store current key and chunk, as they will be deleted later.
+	string ori_key(cursor->current_key);
+	string desired_chunk(cursor->current_tag);
+
+	const char * pos = cursor->current_tag.data();
+	const char * end = pos + cursor->current_tag.size();
+	Xapian::docid first_did_in_chunk;
+	if (is_first_chunk) {
+	    first_did_in_chunk = read_start_of_first_chunk(&pos, end, NULL, NULL);
+	} else {
+	    if (!unpack_uint_preserving_sort(&keypos, keyend, &first_did_in_chunk)) {
+		report_read_error(keypos);
+	    }
 	}
 
-	map<Xapian::docid, Xapian::termcount>::const_iterator it, pre_it;
-	pre_it = it = doclens.begin();
-	Assert(it != doclens.end());
-
-	LOGVALUE(DB, doclens.size());
-	while (it!=doclens.end())
-	{
-		string key = make_key(string(), it->first);
-
-		AutoPtr<BrassCursor> cursor(cursor_get());
-
-		(void)cursor->find_entry(key);
-		Assert(!cursor->after_end());
-
-		const char * keypos = cursor->current_key.data();
-		const char * keyend = keypos + cursor->current_key.size();
-
-		check_tname_in_key(&keypos, keyend, string());
-
-		bool is_first_chunk = (keypos == keyend);
-		LOGVALUE(DB, is_first_chunk);
-
-		cursor->read_tag();
-
-		//Store current key and chunk, as they will be deleted later.
-		string ori_key(cursor->current_key);
-		string desired_chunk(cursor->current_tag);
-
-		const char * pos = cursor->current_tag.data();
-		const char * end = pos + cursor->current_tag.size();
-		Xapian::docid first_did_in_chunk;
-		if (is_first_chunk) {
-			first_did_in_chunk = read_start_of_first_chunk(&pos, end, NULL, NULL);
-		} else {
-			if (!unpack_uint_preserving_sort(&keypos, keyend, &first_did_in_chunk)) {
-				report_read_error(keypos);
-			}
-		}
-
-		bool is_last_chunk;
-		read_start_of_chunk(&pos, end, first_did_in_chunk, &is_last_chunk);
-		LOGVALUE(DB,is_last_chunk);
-		LOGVALUE(DB,first_did_in_chunk);
+	bool is_last_chunk;
+	read_start_of_chunk(&pos, end, first_did_in_chunk, &is_last_chunk);
+	LOGVALUE(DB,is_last_chunk);
+	LOGVALUE(DB,first_did_in_chunk);
 
 
-		Xapian::docid first_did_in_next_chunk = 0;
-		if (is_last_chunk) {
-			it = doclens.end();
-		} else {
-			//If this chunk isn't last chunk, get first doc id in next chunk.
-			cursor->next();
-			Assert(!cursor->after_end());
-			const char * kpos = cursor->current_key.data();
-			const char * kend = kpos + cursor->current_key.size();
-			Assert(check_tname_in_key(&kpos, kend, string()));
-			unpack_uint_preserving_sort(&kpos, kend, &first_did_in_next_chunk);
-			Assert(first_did_in_next_chunk);
-		}
-		LOGVALUE(DB,first_did_in_next_chunk);
-
-		// All changes among first doc id in this chunk and first doc id in next chunk 
-		// should be applied to this chunk.
-		while (it!=doclens.end() && it->first < first_did_in_next_chunk) 	{
-			++it;
-		}
-
-		// Delete current chunk to insert new chunk later.
-		del(ori_key);
-		DoclenChunkWriter writer(desired_chunk, pre_it, it, this, is_first_chunk,first_did_in_chunk);
-		writer.merge_doclen_changes();
-		pre_it = it;
+	Xapian::docid first_did_in_next_chunk = 0;
+	if (is_last_chunk) {
+	    it = doclens.end();
+	} else {
+	    //If this chunk isn't last chunk, get first doc id in next chunk.
+	    cursor->next();
+	    Assert(!cursor->after_end());
+	    const char * kpos = cursor->current_key.data();
+	    const char * kend = kpos + cursor->current_key.size();
+	    Assert(check_tname_in_key(&kpos, kend, string()));
+	    unpack_uint_preserving_sort(&kpos, kend, &first_did_in_next_chunk);
+	    Assert(first_did_in_next_chunk);
 	}
+	LOGVALUE(DB,first_did_in_next_chunk);
+
+	// All changes among first doc id in this chunk and first doc id in next chunk
+	// should be applied to this chunk.
+	while (it!=doclens.end() && it->first < first_did_in_next_chunk) {
+	    ++it;
+	}
+
+	// Delete current chunk to insert new chunk later.
+	del(ori_key);
+	DoclenChunkWriter writer(desired_chunk, pre_it, it, this, is_first_chunk,first_did_in_chunk);
+	writer.merge_doclen_changes();
+	pre_it = it;
+    }
 }
-
 
 void
 GlassPostListTable::merge_changes(const string &term,
