@@ -241,7 +241,6 @@ check_glass_table(const char * tablename, const string &db_dir,
 		unsigned bytes_info = 0;
 
 		while (true) {
-
 		    Xapian::termcount doclen = 0;
 		    if (is_in_block && len_info) {
 			did++;
