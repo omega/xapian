@@ -5,6 +5,7 @@
  * Copyright 2002 Ananova Ltd
  * Copyright 2002,2003,2004,2005,2007,2008,2009,2011,2013,2014 Olly Betts
  * Copyright 2007,2009 Lemur Consulting Ltd
+ * Copyright 2014 Shangtong Zhang
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -33,9 +34,29 @@
 #include "api/leafpostlist.h"
 #include "omassert.h"
 
+#include "debuglog.h"
+
 #include "autoptr.h"
 #include <map>
 #include <string>
+#include <vector>
+
+//the following four macros is for fixed width doclen chunk.
+
+//an indicator used in fixed width doclen chunk
+#define SEPERATOR ((unsigned)-1)
+
+/* If the length of a continuous block is more than this value, 
+ * fixed width format will be applied. */
+#define DOCLEN_CHUNK_MIN_CONTIGUOUS_LENGTH 5
+
+/* The ratio is good bytes / used bytes in a block of fixed width format. 
+ * we require good bytes ratio must be bigger than this value 
+ * if we want to apply fixed width format. */
+#define DOCLEN_CHUNK_MIN_GOOD_BYTES_RATIO 0.8
+
+/* A fixed width doclen chunk has at most so many entries. */
+#define MAX_ENTRIES_IN_CHUNK 2000
 
 using namespace std;
 
@@ -49,6 +70,244 @@ namespace Glass {
 }
 
 using Glass::RootInfo;
+
+/* The Format Of Fixed Width Doclen Chunk
+ *
+ * In normal format of postlist chunk for doc length,
+ * we first encode the increment of did, then the doc length is encoded.
+ * But when doc ids are continuous, we have more efficient ways to encode them.
+ * In the following, we refer some continuous ids as a continuous block. 
+ * When encoding doc lengths, if we discover a continuous block,
+ * we first encode -1 as an indicator, then the increment of did, 
+ * the number of entries in this block, the bytes to encode a length.
+ * for example, if we have some tuples < did, len >,
+ * <1,7>,<2,5>,<3,6>,<4,15>,<5,257>, 
+ * then the chunk will be 
+ * -1 1 5 2 7 5 6 15 257 */
+
+
+/* This class is used to encode a map<did,len> into a chunk.
+ * It doesn't deal with the header of the chunk. */
+class FixedWidthChunk {
+
+	///They are the start and the end of the postlist to be encoded.
+	map<Xapian::docid,Xapian::termcount>::const_iterator pl_start, pl_end;
+
+	public:
+
+	/* Default constructor
+	 * @pl_start_: start of desired postlist
+	 * @pl_end_: end of desired postlist */
+	FixedWidthChunk(map<Xapian::docid,Xapian::termcount>::const_iterator pl_start_, 
+		map<Xapian::docid,Xapian::termcount>::const_iterator pl_end_);
+
+	///encode a post list
+	bool encode(string& desired_chunk);
+
+};
+
+/* This class is used to read fixed width format doclen chunk.
+ * It doesn't deal with the header of the chunk. */
+class FixedWidthChunkReader {
+
+	///start of desired chunk 
+	const char* ori_pos;
+
+	///current position of desried chunk
+	const char* pos;
+
+	///If we are in a continuous block, this pointer is to the start of the block.
+	const char* pos_of_block;
+
+	///end of desired chunk
+	const char* end;
+
+	///current doc id
+	Xapian::docid cur_did;
+
+	///current doc length
+	Xapian::termcount cur_length;
+
+	///if we have run out the whole chunk
+	bool is_at_end;
+
+	//indicating whether we are in a continuous block.
+	bool is_in_block;
+
+	/* If we are in a continuous block,
+	 * the following three variables is the basic info for this continuous block. */
+
+	///The number of entries which haven't been read in this block.
+	unsigned len_info;
+
+	///In this block, each length is encoded in @bytes_info bytes.
+	unsigned bytes_info;
+
+	///the doc id just before this block.
+	Xapian::docid did_before_block;
+	
+	///first doc id in this chunk
+	Xapian::docid first_did_in_chunk;
+
+
+	public:
+	/* @pos_ : a pointer to the end of the header of the chunk.
+	 * @end_ : a pointer to the end of the chunk.
+	 * @first_did_in_chunk_ : first doc id in this chunk */
+	FixedWidthChunkReader(const char* pos_, const char* end_, Xapian::docid first_did_in_chunk_)
+		: ori_pos(pos_), pos(pos_), pos_of_block(NULL), end(end_), cur_did(0), cur_length(0),
+		is_at_end(false),is_in_block(false),len_info(0),bytes_info(0),
+		did_before_block(0),first_did_in_chunk(first_did_in_chunk_)
+	{
+		LOGCALL_CTOR(DB, "FixedWidthChunkReader", first_did_in_chunk_);
+
+		if (pos == end) {
+			//Since the chunk is empty, we are at the end now.
+			is_at_end = true;
+			LOGLINE(DB, "empty chunk" ); 
+			return;
+		}
+
+		//set current doc id
+		cur_did = first_did_in_chunk_;
+
+		/* read the first entry
+		 * doc id of first entry is @first_did_in_chunk_, 
+		 * as we always have a delta of 0 for first entry.*/
+		next();
+		LOGVALUE(DB, is_at_end);
+		LOGVALUE(DB, cur_did);
+		LOGVALUE(DB, cur_length);
+	};
+
+	/* jump to desired did, 
+	 * if it fails, it will arrive at the exact did just after @desired_did */
+	bool jump_to(Xapian::docid desired_did);
+
+	/* move to next did in the chunk. 
+	 * If no more did, set is_at_end=true. */
+	bool next();
+
+	/// return current docid
+	Xapian::docid get_docid() const {
+		return cur_did;
+	}
+
+	/// return length of doc with current doc id
+	Xapian::termcount get_doclength() const {
+		return cur_length;
+	}
+
+	/// return is_at_end
+	bool at_end() const {
+		return is_at_end;
+	}
+};
+
+
+///This class is used to update fixed width doclen chunk.
+class DoclenChunkWriter {
+
+	///the original chunk
+	const string& chunk_from;
+
+	///the changes of doc length
+	map<Xapian::docid,Xapian::termcount>::const_iterator changes_start, changes_end;
+
+	///postlist table, used to insert new chunk
+	BrassPostListTable* postlist_table;
+
+	///if this chunk is first chunk
+	bool is_first_chunk;
+
+	///if this chunk is last chunk
+	bool is_last_chunk;
+
+	///first doc id in this chunk
+	Xapian::docid first_did_in_chunk;
+
+	///new map of doc length
+	map<Xapian::docid,Xapian::termcount> new_doclen;
+
+	///merge old map and new map, the @new_doclen is valid.
+	bool get_new_doclen( );
+
+	public:
+
+	/* @chunk_from_ : original chunk, which means doc length changes havn't been applied.
+	 * @changes_start_  @changes_end_ : iterator of map of changes 
+	 * @postlist_table : corresponding postlist table of the chunk 
+	 * @first_did_in_chunk_ : first doc id in this chunk */
+	DoclenChunkWriter(const string& chunk_from_, 
+		map<Xapian::docid,Xapian::termcount>::const_iterator& changes_start_,
+		map<Xapian::docid,Xapian::termcount>::const_iterator& changes_end_,
+		BrassPostListTable* postlist_table_,
+		bool is_first_chunk_, Xapian::docid first_did_in_chunk_)
+		: chunk_from(chunk_from_), changes_start(changes_start_), changes_end(changes_end_), 
+		postlist_table(postlist_table_), is_first_chunk(is_first_chunk_),
+		first_did_in_chunk(first_did_in_chunk_)
+	{
+		LOGCALL_CTOR(DB, "DoclenChunkWriter", is_first_chunk_ | first_did_in_chunk_ );
+		is_last_chunk = true;
+	}
+
+	/* it will build and insert new chunk,
+	 * make sure old chunk is deleted before call this function.*/
+	bool merge_doclen_changes();
+};
+
+/* This class is just a wrapper of FixedWidthChunkReader,
+ * This class just deals with the header of the chunk. */
+class DoclenChunkReader {
+
+	///desired chunk to read
+	const string& chunk;
+
+	/* as this class is just a wrapper, 
+	 * @p_fwcr is the kernel of this class which deals with most work. */
+	AutoPtr<FixedWidthChunkReader> p_fwcr;
+
+	public:
+
+	/* @chunk_ : desired chunk to be read 
+	 * @is_first_chunk : if this chunk is first chunk
+	 * @first_did_in_chunk : first doc id in this chunk */
+	DoclenChunkReader(const string& chunk_, bool is_first_chunk, Xapian::docid first_did_in_chunk);
+
+	///Defalut constructor
+	~DoclenChunkReader() {
+		LOGCALL_DTOR(DB, "DoclenChunkReader");
+	}
+
+	/* return doc length of @desired_did,
+	 * if @desired_did doesn't exist, return -1 */
+	Xapian::termcount get_doclen(Xapian::docid desired_did) {
+		if (p_fwcr->jump_to(desired_did)) {
+			return p_fwcr->get_doclength();
+		}
+		return -1;
+	}
+
+	///return current doc length
+	Xapian::termcount get_doclen() {
+		return p_fwcr->get_doclength();
+	}
+
+	///return current doc id
+	Xapian::docid get_docid() {
+		return p_fwcr->get_docid();
+	}
+
+	/// move to next entries in the chunk
+	bool next() {
+		return p_fwcr->next();
+	}
+
+	///return if we are at the end of the chunk
+	bool at_end() {
+		return p_fwcr->at_end();
+	}
+};
 
 class GlassPostList;
 
@@ -144,7 +403,7 @@ class GlassPostList : public LeafPostList {
 	/// True if this is the last chunk.
 	bool is_last_chunk;
 
-	/// Whether we've run off the end of the list yet.
+    /// Whether we've run off current chunk.
 	bool is_at_end;
 
 	/// Cursor pointing to current chunk of postlist.
@@ -170,6 +429,16 @@ class GlassPostList : public LeafPostList {
 
 	/// The number of entries in the posting list.
 	Xapian::doccount number_of_entries;
+
+	/// To read doclen chunk, when is_doclen_list is true.
+	AutoPtr<DoclenChunkReader> p_doclen_chunk_reader;
+
+	/// True when this postlist is to store documents length.
+	bool is_doclen_list;
+
+	/// True when current chunk is first chunk.
+	/// This variable is valid only when this chunk is for doc length.
+	bool is_first_chunk;
 
 	/// Copying is not allowed.
 	GlassPostList(const GlassPostList &);
@@ -280,7 +549,7 @@ class GlassPostList : public LeafPostList {
 	PostList * skip_to(Xapian::docid desired_did, double w_min);
 
 	/// Return true if and only if we're off the end of the list.
-	bool at_end() const { return is_at_end; }
+	bool at_end() const { return is_at_end&&is_last_chunk; }
 
 	/// Get a description of the document.
 	std::string get_description() const;
