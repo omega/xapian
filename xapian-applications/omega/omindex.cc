@@ -83,6 +83,7 @@ using namespace std;
 static bool skip_duplicates = false;
 static bool follow_symlinks = false;
 static bool ignore_exclusions = false;
+static bool retry_failed = false;
 static bool spelling = false;
 static off_t  max_size = 0;
 static size_t sample_size = SAMPLE_SIZE;
@@ -288,7 +289,7 @@ static void
 skip(const string & urlterm, const string & context, const string & msg,
      off_t size, time_t last_mod, unsigned flags = 0)
 {
-    failed.add(urlterm, size, last_mod);
+    failed.add(urlterm, last_mod, size);
 
     if (!verbose || (flags & SKIP_SHOW_FILENAME)) {
 	if (!verbose && (flags & SKIP_VERBOSE_ONLY)) return;
@@ -419,6 +420,18 @@ index_mimetype(const string & file, const string & urlterm, const string & url,
 		    return;
 		}
 	    }
+	}
+    }
+
+    if (!retry_failed) {
+	time_t failed_last_mod;
+	off_t failed_size;
+	if (failed.contains(urlterm, failed_last_mod, failed_size) &&
+	    last_mod <= failed_last_mod &&
+	    d.get_size() == failed_size) {
+	    if (verbose)
+		cout << "failed to extract text on earlier run" << endl;
+	    return;
 	}
     }
 
@@ -1173,6 +1186,7 @@ main(int argc, char **argv)
 	{ "empty-docs",	required_argument,	NULL, 'e' },
 	{ "max-size",	required_argument,	NULL, 'm' },
 	{ "sample-size",required_argument,	NULL, 'E' },
+	{ "retry-failed",	no_argument,	NULL, 'R' },
 	{ "opendir-sleep",	required_argument,	NULL, OPT_OPENDIR_SLEEP },
 	{ 0, 0, NULL, 0 }
     };
@@ -1380,7 +1394,7 @@ main(int argc, char **argv)
 
     string dbpath;
     int getopt_ret;
-    while ((getopt_ret = gnu_getopt_long(argc, argv, "hvd:D:U:M:F:l:s:pfSVe:im:E:",
+    while ((getopt_ret = gnu_getopt_long(argc, argv, "hvd:D:U:M:F:l:s:pfRSVe:im:E:",
 					 longopts, NULL)) != -1) {
 	switch (getopt_ret) {
 	case 'h': {
@@ -1419,6 +1433,8 @@ main(int argc, char **argv)
 "  -E, --sample-size=SIZE    maximum size for the document text sample\n"
 "                            (supports the same formats as --max-size).\n"
 "                            (default: 512)\n"
+"  -R, --retry-failed        retry files which omindex failed to extract text\n"
+"                            from on a previous run\n"
 "      --opendir-sleep=SECS  sleep for SECS seconds before opening each\n"
 "                            directory - sleeping for 2 seconds seems to\n"
 "                            reliably work around problems with indexing files\n"
@@ -1530,6 +1546,9 @@ main(int argc, char **argv)
 	    break;
 	case 'i':
 	    ignore_exclusions = true;
+	    break;
+	case 'R': // --retry-failed
+	    retry_failed = true;
 	    break;
 	case 's':
 	    try {

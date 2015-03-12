@@ -21,6 +21,7 @@
 #ifndef OMEGA_INCLUDED_FAILED_H
 #define OMEGA_INCLUDED_FAILED_H
 
+#include <cstdlib>
 #include <sys/types.h>
 #include <string>
 
@@ -48,6 +49,24 @@ class Failed {
 	value += str(size);
 	db.set_metadata(key, value);
     }
+
+    bool contains(const std::string & key, time_t& last_mod, off_t& size) {
+	const std::string value = db.get_metadata(key);
+	if (value.empty()) return false;
+	const char * p = value.c_str();
+	char * end;
+	long long v = strtoll(p, &end, 10);
+	if (*end != ',') return false;
+	// FIXME: check conversions.
+	last_mod = v;
+	p = end + 1;
+	v = strtoll(p, &end, 10);
+	size = v;
+	return true;
+    }
+
+    // FIXME: Need to remove entries when a file is successfully indexed, or
+    // is deleted.
 };
 
 #endif // OMEGA_INCLUDED_FAILED_H
