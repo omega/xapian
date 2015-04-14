@@ -435,7 +435,6 @@ merge_postlists(Xapian::Compactor & compactor,
 		pack_uint(first_tag, cf);
 		pack_uint(first_tag, tags[0].first - 1);
 		string tag = tags[0].second;
-		tag[0] = (tags.size() == 1) ? '1' : '0';
 		first_tag += tag;
 		out->add(last_key, first_tag);
 
@@ -451,7 +450,6 @@ merge_postlists(Xapian::Compactor & compactor,
 		i = tags.begin();
 		while (++i != tags.end()) {
 		    tag = i->second;
-		    tag[0] = (i + 1 == tags.end()) ? '1' : '0';
 		    out->add(pack_glass_postlist_key(term, i->first), tag);
 		}
 	    }

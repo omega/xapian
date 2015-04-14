@@ -1,7 +1,7 @@
 /* glass_postlist.cc: Postlists in a glass database
  *
  * Copyright 1999,2000,2001 BrightStation PLC
- * Copyright 2002,2003,2004,2005,2007,2008,2009,2011,2013,2014 Olly Betts
+ * Copyright 2002,2003,2004,2005,2007,2008,2009,2011,2013,2014,2015 Olly Betts
  * Copyright 2007,2008,2009 Lemur Consulting Ltd
  *
  * This program is free software; you can redistribute it and/or
@@ -95,8 +95,7 @@ class Glass::PostlistChunkWriter {
     public:
 	PostlistChunkWriter(const string &orig_key_,
 			    bool is_first_chunk_,
-			    const string &tname_,
-			    bool is_last_chunk_);
+			    const string &tname_);
 
 	/// Append an entry to this chunk.
 	void append(GlassTable * table, Xapian::docid did,
@@ -124,7 +123,6 @@ class Glass::PostlistChunkWriter {
 	string orig_key;
 	string tname;
 	bool is_first_chunk;
-	bool is_last_chunk;
 	bool started;
 
 	Xapian::docid first_did;
@@ -227,16 +225,9 @@ read_wdf(const char ** posptr, const char * end, Xapian::termcount * wdf_ptr)
 static Xapian::docid
 read_start_of_chunk(const char ** posptr,
 		    const char * end,
-		    Xapian::docid first_did_in_chunk,
-		    bool * is_last_chunk_ptr)
+		    Xapian::docid first_did_in_chunk)
 {
-    LOGCALL_STATIC(DB, Xapian::docid, "read_start_of_chunk", reinterpret_cast<const void*>(posptr) | reinterpret_cast<const void*>(end) | first_did_in_chunk | reinterpret_cast<const void*>(is_last_chunk_ptr));
-    Assert(is_last_chunk_ptr);
-
-    // Read whether this is the last chunk
-    if (!unpack_bool(posptr, end, is_last_chunk_ptr))
-	report_read_error(*posptr);
-    LOGVALUE(DB, *is_last_chunk_ptr);
+    LOGCALL_STATIC(DB, Xapian::docid, "read_start_of_chunk", reinterpret_cast<const void*>(posptr) | reinterpret_cast<const void*>(end) | first_did_in_chunk);
 
     // Read what the final document ID in this chunk is.
     Xapian::docid increase_to_last;
@@ -305,14 +296,12 @@ PostlistChunkReader::next()
 
 PostlistChunkWriter::PostlistChunkWriter(const string &orig_key_,
 					 bool is_first_chunk_,
-					 const string &tname_,
-					 bool is_last_chunk_)
+					 const string &tname_)
 	: orig_key(orig_key_),
 	  tname(tname_), is_first_chunk(is_first_chunk_),
-	  is_last_chunk(is_last_chunk_),
 	  started(false)
 {
-    LOGCALL_CTOR(DB, "PostlistChunkWriter", orig_key_ | is_first_chunk_ | tname_ | is_last_chunk_);
+    LOGCALL_CTOR(DB, "PostlistChunkWriter", orig_key_ | is_first_chunk_ | tname_);
 }
 
 void
@@ -326,10 +315,7 @@ PostlistChunkWriter::append(GlassTable * table, Xapian::docid did,
 	Assert(did > current_did);
 	// Start a new chunk if this one has grown to the threshold.
 	if (chunk.size() >= CHUNKSIZE) {
-	    bool save_is_last_chunk = is_last_chunk;
-	    is_last_chunk = false;
 	    flush(table);
-	    is_last_chunk = save_is_last_chunk;
 	    is_first_chunk = false;
 	    first_did = did;
 	    chunk.resize(0);
@@ -359,31 +345,13 @@ make_start_of_first_chunk(Xapian::doccount entries,
 /** Make the data to go at the start of a standard chunk.
  */
 static inline string
-make_start_of_chunk(bool new_is_last_chunk,
-		    Xapian::docid new_first_did,
+make_start_of_chunk(Xapian::docid new_first_did,
 		    Xapian::docid new_final_did)
 {
     Assert(new_final_did >= new_first_did);
     string chunk;
-    pack_bool(chunk, new_is_last_chunk);
     pack_uint(chunk, new_final_did - new_first_did);
     return chunk;
-}
-
-static void
-write_start_of_chunk(string & chunk,
-		     unsigned int start_of_chunk_header,
-		     unsigned int end_of_chunk_header,
-		     bool is_last_chunk,
-		     Xapian::docid first_did_in_chunk,
-		     Xapian::docid last_did_in_chunk)
-{
-    Assert((size_t)(end_of_chunk_header - start_of_chunk_header) <= chunk.size());
-
-    chunk.replace(start_of_chunk_header,
-		  end_of_chunk_header - start_of_chunk_header,
-		  make_start_of_chunk(is_last_chunk, first_did_in_chunk,
-				      last_did_in_chunk));
 }
 
 void
@@ -402,9 +370,6 @@ PostlistChunkWriter::flush(GlassTable *table)
     if (!started) {
 	/* This chunk is now empty so disappears entirely.
 	 *
-	 * If this was the last chunk, then the previous chunk
-	 * must have its "is_last_chunk" flag updated.
-	 *
 	 * If this was the first chunk, then the next chunk must
 	 * be transformed into the first chunk.  Messy!
 	 */
@@ -412,22 +377,13 @@ PostlistChunkWriter::flush(GlassTable *table)
 	Assert(!orig_key.empty());
 	if (is_first_chunk) {
 	    LOGLINE(DB, "PostlistChunkWriter::flush(): deleting first chunk");
-	    if (is_last_chunk) {
-		/* This is the first and the last chunk, ie the only
-		 * chunk, so just delete the tag.
-		 */
-		table->del(orig_key);
-		return;
-	    }
-
-	    /* This is the messiest case.  The first chunk is to
-	     * be removed, and there is at least one chunk after
-	     * it.  Need to rewrite the next chunk as the first
+	    /* The first chunk is to be removed - check if there is at least
+	     * one chunk after it and if so rewrite is to be the new first
 	     * chunk.
 	     */
-	    AutoPtr<GlassCursor> cursor(table->cursor_get());
+	    MutableGlassCursor cursor(table);
 
-	    if (!cursor->find_entry(orig_key)) {
+	    if (!cursor.find_entry(orig_key)) {
 		throw Xapian::DatabaseCorruptError("The key we're working on has disappeared");
 	    }
 
@@ -443,23 +399,26 @@ PostlistChunkWriter::flush(GlassTable *table)
 	    Xapian::doccount num_ent;
 	    Xapian::termcount coll_freq;
 	    {
-		cursor->read_tag();
-		const char *tagpos = cursor->current_tag.data();
-		const char *tagend = tagpos + cursor->current_tag.size();
+		cursor.read_tag();
+		const char *tagpos = cursor.current_tag.data();
+		const char *tagend = tagpos + cursor.current_tag.size();
 
 		(void)read_start_of_first_chunk(&tagpos, tagend,
 						&num_ent, &coll_freq);
 	    }
 
-	    // Seek to the next chunk.
-	    cursor->next();
-	    if (cursor->after_end()) {
-		throw Xapian::DatabaseCorruptError("Expected another key but found none");
+	    // Delete the first chunk, leaving the cursor on the next item.
+	    if (!cursor.del()) {
+		// We've hit the end of the table, so no next chunk.
+		return;
 	    }
-	    const char *kpos = cursor->current_key.data();
-	    const char *kend = kpos + cursor->current_key.size();
+
+	    const char *kpos = cursor.current_key.data();
+	    const char *kend = kpos + cursor.current_key.size();
 	    if (!check_tname_in_key(&kpos, kend, tname)) {
-		throw Xapian::DatabaseCorruptError("Expected another key with the same term name but found a different one");
+		// The next item is a chunk for a different term, so we're
+		// done.
+		return;
 	    }
 
 	    // Read the new first docid
@@ -468,89 +427,31 @@ PostlistChunkWriter::flush(GlassTable *table)
 		report_read_error(kpos);
 	    }
 
-	    cursor->read_tag();
-	    const char *tagpos = cursor->current_tag.data();
-	    const char *tagend = tagpos + cursor->current_tag.size();
+	    cursor.read_tag();
+	    const char *tagpos = cursor.current_tag.data();
+	    const char *tagend = tagpos + cursor.current_tag.size();
 
 	    // Read the chunk header
-	    bool new_is_last_chunk;
 	    Xapian::docid new_last_did_in_chunk =
-		read_start_of_chunk(&tagpos, tagend, new_first_did,
-				    &new_is_last_chunk);
+		read_start_of_chunk(&tagpos, tagend, new_first_did);
 
 	    string chunk_data(tagpos, tagend);
 
 	    // First remove the renamed tag
-	    table->del(cursor->current_key);
+	    cursor.del();
 
 	    // And now write it as the first chunk
 	    string tag;
 	    tag = make_start_of_first_chunk(num_ent, coll_freq, new_first_did);
-	    tag += make_start_of_chunk(new_is_last_chunk,
-					      new_first_did,
-					      new_last_did_in_chunk);
+	    tag += make_start_of_chunk(new_first_did, new_last_did_in_chunk);
 	    tag += chunk_data;
 	    table->add(orig_key, tag);
 	    return;
 	}
 
 	LOGLINE(DB, "PostlistChunkWriter::flush(): deleting secondary chunk");
-	/* This isn't the first chunk.  Check whether we're the last chunk. */
-
-	// Delete this chunk
+	// Just delete this chunk
 	table->del(orig_key);
-
-	if (is_last_chunk) {
-	    LOGLINE(DB, "PostlistChunkWriter::flush(): deleting secondary last chunk");
-	    // Update the previous chunk's is_last_chunk flag.
-	    AutoPtr<GlassCursor> cursor(table->cursor_get());
-
-	    /* Should not find the key we just deleted, but should
-	     * find the previous chunk. */
-	    if (cursor->find_entry(orig_key)) {
-		throw Xapian::DatabaseCorruptError("Glass key not deleted as we expected");
-	    }
-	    // Make sure this is a chunk with the right term attached.
-	    const char * keypos = cursor->current_key.data();
-	    const char * keyend = keypos + cursor->current_key.size();
-	    if (!check_tname_in_key(&keypos, keyend, tname)) {
-		throw Xapian::DatabaseCorruptError("Couldn't find chunk before delete chunk");
-	    }
-
-	    bool is_prev_first_chunk = (keypos == keyend);
-
-	    // Now update the last_chunk
-	    cursor->read_tag();
-	    string tag = cursor->current_tag;
-
-	    const char *tagpos = tag.data();
-	    const char *tagend = tagpos + tag.size();
-
-	    // Skip first chunk header
-	    Xapian::docid first_did_in_chunk;
-	    if (is_prev_first_chunk) {
-		first_did_in_chunk = read_start_of_first_chunk(&tagpos, tagend,
-							       0, 0);
-	    } else {
-		if (!unpack_uint_preserving_sort(&keypos, keyend, &first_did_in_chunk))
-		    report_read_error(keypos);
-	    }
-	    bool wrong_is_last_chunk;
-	    string::size_type start_of_chunk_header = tagpos - tag.data();
-	    Xapian::docid last_did_in_chunk =
-		read_start_of_chunk(&tagpos, tagend, first_did_in_chunk,
-				    &wrong_is_last_chunk);
-	    string::size_type end_of_chunk_header = tagpos - tag.data();
-
-	    // write new is_last flag
-	    write_start_of_chunk(tag,
-				 start_of_chunk_header,
-				 end_of_chunk_header,
-				 true, // is_last_chunk
-				 first_did_in_chunk,
-				 last_did_in_chunk);
-	    table->add(cursor->current_key, tag);
-	}
     } else {
 	LOGLINE(DB, "PostlistChunkWriter::flush(): updating chunk which still has items in it");
 	/* The chunk still has some items in it.  Two major subcases:
@@ -586,7 +487,7 @@ PostlistChunkWriter::flush(GlassTable *table)
 
 	    tag = make_start_of_first_chunk(num_ent, coll_freq, first_did);
 
-	    tag += make_start_of_chunk(is_last_chunk, first_did, current_did);
+	    tag += make_start_of_chunk(first_did, current_did);
 	    tag += chunk;
 	    table->add(key, tag);
 	    return;
@@ -626,7 +527,7 @@ PostlistChunkWriter::flush(GlassTable *table)
 	}
 
 	// ...and write the start of this chunk.
-	tag = make_start_of_chunk(is_last_chunk, first_did, current_did);
+	tag = make_start_of_chunk(first_did, current_did);
 
 	tag += chunk;
 	table->add(new_key, tag);
@@ -714,8 +615,7 @@ GlassPostList::init()
 
     did = read_start_of_first_chunk(&pos, end, &number_of_entries, NULL);
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
-					    &is_last_chunk);
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
     read_wdf(&pos, end, &wdf);
     LOGLINE(DB, "Initial docid " << did);
 }
@@ -775,24 +675,18 @@ void
 GlassPostList::next_chunk()
 {
     LOGCALL_VOID(DB, "GlassPostList::next_chunk", NO_ARGS);
-    if (is_last_chunk) {
-	is_at_end = true;
-	return;
-    }
-
+    // FIXME: Store the last docid for each term in the header, so we don't need to call next() when we hit the end?
     cursor->next();
     if (cursor->after_end()) {
 	is_at_end = true;
-	throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
-				     term + "'");
+	return;
     }
     const char * keypos = cursor->current_key.data();
     const char * keyend = keypos + cursor->current_key.size();
     // Check we're still in same postlist
     if (!check_tname_in_key_lite(&keypos, keyend, term)) {
 	is_at_end = true;
-	throw Xapian::DatabaseCorruptError("Unexpected end of posting list for '" +
-				     term + "'");
+	return;
     }
 
     Xapian::docid newdid;
@@ -812,8 +706,7 @@ GlassPostList::next_chunk()
     end = pos + cursor->current_tag.size();
 
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
-					    &is_last_chunk);
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
     read_wdf(&pos, end, &wdf);
 }
 
@@ -879,7 +772,6 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
     if (!check_tname_in_key_lite(&keypos, keyend, term)) {
 	// This should only happen if the postlist doesn't exist at all.
 	is_at_end = true;
-	is_last_chunk = true;
 	return;
     }
     is_at_end = false;
@@ -905,8 +797,7 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
     }
 
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk,
-					    &is_last_chunk);
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
     read_wdf(&pos, end, &wdf);
 
     // Possible, since desired_did might be after end of this chunk and before
@@ -1042,7 +933,7 @@ GlassPostListTable::get_chunk(const string &tname,
 	    throw Xapian::DatabaseCorruptError("Attempted to delete or modify an entry in a non-existent posting list for " + tname);
 
 	*from = NULL;
-	*to = new PostlistChunkWriter(string(), true, tname, true);
+	*to = new PostlistChunkWriter(string(), true, tname);
 	RETURN(Xapian::docid(-1));
     }
 
@@ -1063,11 +954,9 @@ GlassPostListTable::get_chunk(const string &tname,
 	}
     }
 
-    bool is_last_chunk;
     Xapian::docid last_did_in_chunk;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk, &is_last_chunk);
-    *to = new PostlistChunkWriter(cursor->current_key, is_first_chunk, tname,
-				  is_last_chunk);
+    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
+    *to = new PostlistChunkWriter(cursor->current_key, is_first_chunk, tname);
     if (did > last_did_in_chunk) {
 	// This is the shortcut.  Not very pretty, but I'll leave refactoring
 	// until I've a clearer picture of everything which needs to be done.
@@ -1078,17 +967,16 @@ GlassPostListTable::get_chunk(const string &tname,
     } else {
 	*from = new PostlistChunkReader(first_did_in_chunk, string(pos, end));
     }
-    if (is_last_chunk) RETURN(Xapian::docid(-1));
 
     // Find first did of next tag.
     cursor->next();
     if (cursor->after_end()) {
-	throw Xapian::DatabaseCorruptError("Expected another key but found none");
+	RETURN(Xapian::docid(-1));
     }
     const char *kpos = cursor->current_key.data();
     const char *kend = kpos + cursor->current_key.size();
     if (!check_tname_in_key(&kpos, kend, tname)) {
-	throw Xapian::DatabaseCorruptError("Expected another key with the same term name but found a different one");
+	RETURN(Xapian::docid(-1));
     }
 
     // Read the new first docid
@@ -1115,7 +1003,7 @@ GlassPostListTable::merge_doclen_changes(const map<Xapian::docid, Xapian::termco
     if (!key_exists(current_key)) {
 	LOGLINE(DB, "Adding dummy first chunk");
 	string newtag = make_start_of_first_chunk(0, 0, 0);
-	newtag += make_start_of_chunk(true, 0, 0);
+	newtag += make_start_of_chunk(0, 0);
 	add(current_key, newtag);
     }
 
@@ -1176,7 +1064,7 @@ GlassPostListTable::merge_changes(const string &term,
 	// termfreq and collfreq.
 	string current_key = make_key(term);
 	string tag;
-	(void)get_exact_entry(current_key, tag);
+	bool found = get_exact_entry(current_key, tag);
 
 	// Read start of first chunk to get termfreq and collfreq.
 	const char *pos = tag.data();
@@ -1184,31 +1072,25 @@ GlassPostListTable::merge_changes(const string &term,
 	Xapian::doccount termfreq;
 	Xapian::termcount collfreq;
 	Xapian::docid firstdid, lastdid;
-	bool islast;
 	if (pos == end) {
 	    termfreq = 0;
 	    collfreq = 0;
 	    firstdid = 0;
 	    lastdid = 0;
-	    islast = true;
 	} else {
 	    firstdid = read_start_of_first_chunk(&pos, end,
 						 &termfreq, &collfreq);
 	    // Handle the generic start of chunk header.
-	    lastdid = read_start_of_chunk(&pos, end, firstdid, &islast);
+	    lastdid = read_start_of_chunk(&pos, end, firstdid);
 	}
 
 	termfreq += changes.get_tfdelta();
 	if (termfreq == 0) {
+	    if (!found) return;
 	    // All postings deleted!  So we can shortcut by zapping the
 	    // posting list.
-	    if (islast) {
-		// Only one entry for this posting list.
-		del(current_key);
-		return;
-	    }
 	    MutableGlassCursor cursor(this);
-	    bool found = cursor.find_entry(current_key);
+	    found = cursor.find_entry(current_key);
 	    Assert(found);
 	    if (!found) return; // Reduce damage!
 	    while (cursor.del()) {
@@ -1222,7 +1104,7 @@ GlassPostListTable::merge_changes(const string &term,
 
 	// Rewrite start of first chunk to update termfreq and collfreq.
 	string newhdr = make_start_of_first_chunk(termfreq, collfreq, firstdid);
-	newhdr += make_start_of_chunk(islast, firstdid, lastdid);
+	newhdr += make_start_of_chunk(firstdid, lastdid);
 	if (pos == end) {
 	    add(current_key, newhdr);
 	} else {

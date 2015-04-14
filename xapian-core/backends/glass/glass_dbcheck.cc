@@ -2,7 +2,7 @@
  * @brief Check consistency of a glass table.
  */
 /* Copyright 1999,2000,2001 BrightStation PLC
- * Copyright 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014 Olly Betts
+ * Copyright 2002,2003,2004,2005,2006,2007,2008,2009,2010,2011,2012,2013,2014,2015 Olly Betts
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -219,13 +219,6 @@ check_glass_table(const char * tablename, const string &db_dir,
 		    }
 		}
 
-		bool is_last_chunk;
-		if (!unpack_bool(&pos, end, &is_last_chunk)) {
-		    if (out)
-			*out << "Failed to unpack last chunk flag for doclen" << endl;
-		    ++errors;
-		    continue;
-		}
 		// Read what the final document ID in this chunk is.
 		if (!unpack_uint(&pos, end, &lastdid)) {
 		    if (out)
@@ -292,13 +285,12 @@ check_glass_table(const char * tablename, const string &db_dir,
 		if (bad) {
 		    continue;
 		}
-		if (is_last_chunk) {
-		    if (did != lastdid) {
-			if (out)
-			    *out << "lastdid " << lastdid << " != last did "
-				 << did << endl;
-			++errors;
-		    }
+
+		if (did != lastdid) {
+		    if (out)
+			*out << "lastdid " << lastdid << " != last did "
+			     << did << endl;
+		    ++errors;
 		}
 
 		continue;
@@ -462,24 +454,7 @@ check_glass_table(const char * tablename, const string &db_dir,
 		++errors;
 		continue;
 	    }
-	    if (!current_term.empty() && term != current_term) {
-		// The term changed unexpectedly.
-		if (pos == end) {
-		    if (out)
-			*out << "No last chunk for term '" << current_term
-			     << "'" << endl;
-		    current_term.resize(0);
-		} else {
-		    if (out)
-			*out << "Mismatch in follow-on chunk in posting list "
-				"for term '" << current_term << "' (got '"
-			     << term << "')" << endl;
-		    current_term = term;
-		    tf = cf = 0;
-		    lastdid = 0;
-		}
-		++errors;
-	    }
+
 	    if (pos == end) {
 		// First chunk.
 		if (term == current_term) {
@@ -521,14 +496,14 @@ check_glass_table(const char * tablename, const string &db_dir,
 		++did;
 	    } else {
 		// Continuation chunk.
-		if (current_term.empty()) {
+		if (current_term != term) {
 		    if (out)
-			*out << "First chunk for term '" << current_term
+			*out << "First chunk for term '" << term
 			     << "' is a continuation chunk" << endl;
 		    ++errors;
 		    current_term = term;
 		}
-		AssertEq(current_term, term);
+
 		if (!unpack_uint_preserving_sort(&pos, end, &did)) {
 		    if (out)
 			*out << "Failed to unpack did from key" << endl;
@@ -546,13 +521,6 @@ check_glass_table(const char * tablename, const string &db_dir,
 		end = pos + cursor->current_tag.size();
 	    }
 
-	    bool is_last_chunk;
-	    if (!unpack_bool(&pos, end, &is_last_chunk)) {
-		if (out)
-		    *out << "Failed to unpack last chunk flag" << endl;
-		++errors;
-		continue;
-	    }
 	    // Read what the final document ID in this chunk is.
 	    if (!unpack_uint(&pos, end, &lastdid)) {
 		if (out)
@@ -596,6 +564,7 @@ check_glass_table(const char * tablename, const string &db_dir,
 	    if (bad) {
 		continue;
 	    }
+#if 0 // FIXME
 	    if (is_last_chunk) {
 		if (tf != termfreq) {
 		    if (out)
@@ -609,20 +578,14 @@ check_glass_table(const char * tablename, const string &db_dir,
 			     << endl;
 		    ++errors;
 		}
-		if (did != lastdid) {
-		    if (out)
-			*out << "lastdid " << lastdid << " != last did " << did
-			     << endl;
-		    ++errors;
-		}
-		current_term.resize(0);
 	    }
-	}
-	if (!current_term.empty()) {
-	    if (out)
-		*out << "Last term '" << current_term << "' has no last chunk"
-		     << endl;
-	    ++errors;
+#endif
+	    if (did != lastdid) {
+		if (out)
+		    *out << "lastdid " << lastdid << " != last did " << did
+			 << endl;
+		++errors;
+	    }
 	}
 
 	map<Xapian::valueno, VStats>::const_iterator i;
