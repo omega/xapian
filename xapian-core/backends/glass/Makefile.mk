@@ -22,6 +22,7 @@ noinst_HEADERS +=\
 	backends/glass/glass_metadata.h\
 	backends/glass/glass_positionlist.h\
 	backends/glass/glass_postlist.h\
+	backends/glass/glass_postlist_encodings.h\
 	backends/glass/glass_replicate_internal.h\
 	backends/glass/glass_spelling.h\
 	backends/glass/glass_spellingwordslist.h\

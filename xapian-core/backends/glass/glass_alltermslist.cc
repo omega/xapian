@@ -22,6 +22,7 @@
 
 #include "glass_alltermslist.h"
 #include "glass_postlist.h"
+#include "glass_postlist_encodings.h"
 
 #include "debuglog.h"
 #include "pack.h"
@@ -39,7 +40,11 @@ GlassAllTermsList::read_termfreq_and_collfreq() const
     cursor->read_tag();
     const char *p = cursor->current_tag.data();
     const char *pend = p + cursor->current_tag.size();
-    GlassPostList::read_number_of_entries(&p, pend, &termfreq, &collfreq);
+    Xapian::docid first, last;
+    if (!decode_initial_chunk_header(&p, pend,
+				     termfreq, collfreq, first, last)) {
+	// FIXME: report_read_error(p);
+    }
 }
 
 GlassAllTermsList::~GlassAllTermsList()

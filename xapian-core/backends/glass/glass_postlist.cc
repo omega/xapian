@@ -34,23 +34,41 @@
 
 using Xapian::Internal::intrusive_ptr;
 
+/// Report an error when reading the posting list.
+XAPIAN_NORETURN(static void report_read_error(const char * position));
+static void report_read_error(const char * position)
+{
+    if (position == 0) {
+	// data ran out
+	LOGLINE(DB, "GlassPostList data ran out");
+	throw Xapian::DatabaseCorruptError("Data ran out unexpectedly when reading posting list.");
+    }
+    // overflow
+    LOGLINE(DB, "GlassPostList value too large");
+    throw Xapian::RangeError("Value in posting list too large.");
+}
+
 void
 GlassPostListTable::get_freqs(const string & term,
 			      Xapian::doccount * termfreq_ptr,
 			      Xapian::termcount * collfreq_ptr) const
 {
-    string key = make_key(term);
+    Xapian::doccount termfreq = 0;
+    Xapian::termcount collfreq = 0;
     string tag;
-    if (!get_exact_entry(key, tag)) {
-	if (termfreq_ptr)
-	    *termfreq_ptr = 0;
-	if (collfreq_ptr)
-	    *collfreq_ptr = 0;
-    } else {
+    if (get_exact_entry(make_key(term), tag)) {
 	const char * p = tag.data();
-	GlassPostList::read_number_of_entries(&p, p + tag.size(),
-					      termfreq_ptr, collfreq_ptr);
+	Xapian::docid first, last;
+	if (!decode_initial_chunk_header(&p, p + tag.size(),
+					 termfreq, collfreq, first, last)) {
+	    report_read_error(p);
+	}
     }
+
+    if (termfreq_ptr)
+	*termfreq_ptr = termfreq;
+    if (collfreq_ptr)
+	*collfreq_ptr = collfreq;
 }
 
 Xapian::termcount
@@ -135,20 +153,6 @@ using Glass::PostlistChunkWriter;
 
 // Static functions
 
-/// Report an error when reading the posting list.
-XAPIAN_NORETURN(static void report_read_error(const char * position));
-static void report_read_error(const char * position)
-{
-    if (position == 0) {
-	// data ran out
-	LOGLINE(DB, "GlassPostList data ran out");
-	throw Xapian::DatabaseCorruptError("Data ran out unexpectedly when reading posting list.");
-    }
-    // overflow
-    LOGLINE(DB, "GlassPostList value too large");
-    throw Xapian::RangeError("Value in posting list too large.");
-}
-
 static inline bool get_tname_from_key(const char **src, const char *end,
 			       string &tname)
 {
@@ -180,31 +184,6 @@ check_tname_in_key(const char **keypos, const char *keyend, const string &tname)
     return check_tname_in_key_lite(keypos, keyend, tname);
 }
 
-/// Read the start of the first chunk in the posting list.
-static Xapian::docid
-read_start_of_first_chunk(const char ** posptr,
-			  const char * end,
-			  Xapian::doccount * number_of_entries_ptr,
-			  Xapian::termcount * collection_freq_ptr)
-{
-    LOGCALL_STATIC(DB, Xapian::docid, "read_start_of_first_chunk", (const void *)posptr | (const void *)end | (void *)number_of_entries_ptr | (void *)collection_freq_ptr);
-
-    GlassPostList::read_number_of_entries(posptr, end,
-			   number_of_entries_ptr, collection_freq_ptr);
-    if (number_of_entries_ptr)
-	LOGVALUE(DB, *number_of_entries_ptr);
-    if (collection_freq_ptr)
-	LOGVALUE(DB, *collection_freq_ptr);
-
-    Xapian::docid did;
-    // Read the docid of the first entry in the posting list.
-    if (!unpack_uint(posptr, end, &did))
-	report_read_error(*posptr);
-    ++did;
-    LOGVALUE(DB, did);
-    RETURN(did);
-}
-
 static inline void
 read_did_increase(const char ** posptr, const char * end,
 		  Xapian::docid * did_ptr)
@@ -219,23 +198,6 @@ static inline void
 read_wdf(const char ** posptr, const char * end, Xapian::termcount * wdf_ptr)
 {
     if (!unpack_uint(posptr, end, wdf_ptr)) report_read_error(*posptr);
-}
-
-/// Read the start of a chunk.
-static Xapian::docid
-read_start_of_chunk(const char ** posptr,
-		    const char * end,
-		    Xapian::docid first_did_in_chunk)
-{
-    LOGCALL_STATIC(DB, Xapian::docid, "read_start_of_chunk", reinterpret_cast<const void*>(posptr) | reinterpret_cast<const void*>(end) | first_did_in_chunk);
-
-    // Read what the final document ID in this chunk is.
-    Xapian::docid increase_to_last;
-    if (!unpack_uint(posptr, end, &increase_to_last))
-	report_read_error(*posptr);
-    Xapian::docid last_did_in_chunk = first_did_in_chunk + increase_to_last;
-    LOGVALUE(DB, last_did_in_chunk);
-    RETURN(last_did_in_chunk);
 }
 
 /** PostlistChunkReader is essentially an iterator wrapper
@@ -398,13 +360,15 @@ PostlistChunkWriter::flush(GlassTable *table)
 	    // them into the block we're renaming.
 	    Xapian::doccount num_ent;
 	    Xapian::termcount coll_freq;
+	    Xapian::docid first, last;
 	    {
 		cursor.read_tag();
 		const char *tagpos = cursor.current_tag.data();
 		const char *tagend = tagpos + cursor.current_tag.size();
-
-		(void)read_start_of_first_chunk(&tagpos, tagend,
-						&num_ent, &coll_freq);
+		if (!decode_initial_chunk_header(&tagpos, tagend,
+						 num_ent, coll_freq, first, last)) {
+		    report_read_error(tagpos);
+		}
 	    }
 
 	    // Delete the first chunk, leaving the cursor on the next item.
@@ -422,8 +386,7 @@ PostlistChunkWriter::flush(GlassTable *table)
 	    }
 
 	    // Read the new first docid
-	    Xapian::docid new_first_did;
-	    if (!unpack_uint_preserving_sort(&kpos, kend, &new_first_did)) {
+	    if (!unpack_uint_preserving_sort(&kpos, kend, &first)) {
 		report_read_error(kpos);
 	    }
 
@@ -432,19 +395,21 @@ PostlistChunkWriter::flush(GlassTable *table)
 	    const char *tagend = tagpos + cursor.current_tag.size();
 
 	    // Read the chunk header
-	    Xapian::docid new_last_did_in_chunk =
-		read_start_of_chunk(&tagpos, tagend, new_first_did);
+	    Xapian::docid last_in_chunk;
+	    if (!decode_delta_chunk_header(&tagpos, tagend,
+					   first, last_in_chunk)) {
+		report_read_error(tagpos);
+	    }
 
-	    string chunk_data(tagpos, tagend);
+	    string tag;
+	    encode_initial_chunk_header(num_ent, coll_freq, first, last, tag); // FIXME: last
+	    encode_delta_chunk_header(first, last_in_chunk, tag);
+	    tag.append(tagpos, tagend);
 
 	    // First remove the renamed tag
 	    cursor.del();
 
 	    // And now write it as the first chunk
-	    string tag;
-	    tag = make_start_of_first_chunk(num_ent, coll_freq, new_first_did);
-	    tag += make_start_of_chunk(new_first_did, new_last_did_in_chunk);
-	    tag += chunk_data;
 	    table->add(orig_key, tag);
 	    return;
 	}
@@ -478,16 +443,22 @@ PostlistChunkWriter::flush(GlassTable *table)
 
 	    Xapian::doccount num_ent;
 	    Xapian::termcount coll_freq;
+	    Xapian::docid dummy, last;
 	    {
 		const char * tagpos = tag.data();
 		const char * tagend = tagpos + tag.size();
-		(void)read_start_of_first_chunk(&tagpos, tagend,
-						&num_ent, &coll_freq);
+		if (!decode_initial_chunk_header(&tagpos, tagend,
+						 num_ent, coll_freq, dummy, last)) {
+		    report_read_error(tagpos);
+		}
 	    }
 
-	    tag = make_start_of_first_chunk(num_ent, coll_freq, first_did);
+	    if (current_did > last)
+		last = current_did;
 
-	    tag += make_start_of_chunk(first_did, current_did);
+	    tag.resize(0);
+	    encode_initial_chunk_header(num_ent, coll_freq, first_did, last, tag); // FIXME: last
+	    encode_delta_chunk_header(first_did, current_did, tag);
 	    tag += chunk;
 	    table->add(key, tag);
 	    return;
@@ -534,21 +505,6 @@ PostlistChunkWriter::flush(GlassTable *table)
     }
 }
 
-/** Read the number of entries in the posting list.
- *  This must only be called when *posptr is pointing to the start of
- *  the first chunk of the posting list.
- */
-void GlassPostList::read_number_of_entries(const char ** posptr,
-				   const char * end,
-				   Xapian::doccount * number_of_entries_ptr,
-				   Xapian::termcount * collection_freq_ptr)
-{
-    if (!unpack_uint(posptr, end, number_of_entries_ptr))
-	report_read_error(*posptr);
-    if (!unpack_uint(posptr, end, collection_freq_ptr))
-	report_read_error(*posptr);
-}
-
 /** The format of a postlist is:
  *
  *  Split into chunks.  Key for first chunk is the termname (encoded as
@@ -558,11 +514,10 @@ void GlassPostList::read_number_of_entries(const char ** posptr,
  *
  *  A chunk (except for the first chunk) contains:
  *
- *  1)  bool - true if this is the last chunk.
- *  2)  difference between final docid in chunk and first docid.
- *  3)  wdf for the first item.
- *  4)  increment in docid to next item, followed by wdf for the item.
- *  5)  (4) repeatedly.
+ *  1)  difference between final docid in chunk and first docid.
+ *  2)  wdf for the first item.
+ *  3)  increment in docid to next item, followed by wdf for the item.
+ *  4)  (3) repeatedly.
  *
  *  The first chunk begins with the number of entries, the collection
  *  frequency, then the docid of the first document, then has the header of a
@@ -613,9 +568,15 @@ GlassPostList::init()
     pos = cursor->current_tag.data();
     end = pos + cursor->current_tag.size();
 
-    did = read_start_of_first_chunk(&pos, end, &number_of_entries, NULL);
+    Xapian::termcount dummy;
+    Xapian::docid last;
+    if (!decode_initial_chunk_header(&pos, end,
+				     number_of_entries, dummy, did, last) ||
+	!decode_delta_chunk_header(&pos, end,
+				   did, last_did_in_chunk)) {
+	report_read_error(pos);
+    }
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
     read_wdf(&pos, end, &wdf);
     LOGLINE(DB, "Initial docid " << did);
 }
@@ -706,7 +667,9 @@ GlassPostList::next_chunk()
     end = pos + cursor->current_tag.size();
 
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
+    if (!decode_delta_chunk_header(&pos, end, did, last_did_in_chunk)) {
+	report_read_error(pos);
+    }
     read_wdf(&pos, end, &wdf);
 }
 
@@ -784,10 +747,15 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
 	// In first chunk
 #ifdef XAPIAN_ASSERTIONS
 	Xapian::doccount old_number_of_entries = number_of_entries;
-	did = read_start_of_first_chunk(&pos, end, &number_of_entries, NULL);
+#endif
+	Xapian::termcount dummy;
+	Xapian::docid last;
+	if (!decode_initial_chunk_header(&pos, end,
+					 old_number_of_entries, dummy, did, last)) {
+	    report_read_error(pos);
+	}
+#ifdef XAPIAN_ASSERTIONS
 	Assert(old_number_of_entries == number_of_entries);
-#else
-	did = read_start_of_first_chunk(&pos, end, NULL, NULL);
 #endif
     } else {
 	// In normal chunk
@@ -797,7 +765,9 @@ GlassPostList::move_to_chunk_containing(Xapian::docid desired_did)
     }
 
     first_did_in_chunk = did;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
+    if (!decode_delta_chunk_header(&pos, end, did, last_did_in_chunk)) {
+	report_read_error(pos);
+    }
     read_wdf(&pos, end, &wdf);
 
     // Possible, since desired_did might be after end of this chunk and before
@@ -947,7 +917,13 @@ GlassPostListTable::get_chunk(const string &tname,
     const char * end = pos + cursor->current_tag.size();
     Xapian::docid first_did_in_chunk;
     if (is_first_chunk) {
-	first_did_in_chunk = read_start_of_first_chunk(&pos, end, NULL, NULL);
+	Xapian::doccount tf;
+	Xapian::termcount cf;
+	Xapian::docid last;
+	if (!decode_initial_chunk_header(&pos, end,
+					 tf, cf, first_did_in_chunk, last)) {
+	    report_read_error(pos);
+	}
     } else {
 	if (!unpack_uint_preserving_sort(&keypos, keyend, &first_did_in_chunk)) {
 	    report_read_error(keypos);
@@ -955,7 +931,10 @@ GlassPostListTable::get_chunk(const string &tname,
     }
 
     Xapian::docid last_did_in_chunk;
-    last_did_in_chunk = read_start_of_chunk(&pos, end, first_did_in_chunk);
+    if (!decode_delta_chunk_header(&pos, end,
+				   first_did_in_chunk, last_did_in_chunk)) {
+	report_read_error(pos);
+    }
     *to = new PostlistChunkWriter(cursor->current_key, is_first_chunk, tname);
     if (did > last_did_in_chunk) {
 	// This is the shortcut.  Not very pretty, but I'll leave refactoring
@@ -1061,7 +1040,7 @@ GlassPostListTable::merge_changes(const string &term,
 {
     {
 	// Rewrite the first chunk of this posting list with the updated
-	// termfreq and collfreq.
+	// termfreq, collfreq and last docid.
 	string current_key = make_key(term);
 	string tag;
 	bool found = get_exact_entry(current_key, tag);
@@ -1071,17 +1050,20 @@ GlassPostListTable::merge_changes(const string &term,
 	const char *end = pos + tag.size();
 	Xapian::doccount termfreq;
 	Xapian::termcount collfreq;
-	Xapian::docid firstdid, lastdid;
+	Xapian::docid firstdid, lastdid, last_in_postlist;
 	if (pos == end) {
 	    termfreq = 0;
 	    collfreq = 0;
 	    firstdid = 0;
 	    lastdid = 0;
 	} else {
-	    firstdid = read_start_of_first_chunk(&pos, end,
-						 &termfreq, &collfreq);
-	    // Handle the generic start of chunk header.
-	    lastdid = read_start_of_chunk(&pos, end, firstdid);
+	    if (!decode_initial_chunk_header(&pos, end,
+					     termfreq, collfreq,
+					     firstdid, last_in_postlist) ||
+		!decode_delta_chunk_header(&pos, end,
+					   firstdid, lastdid)) {
+		report_read_error(pos);
+	    }
 	}
 
 	termfreq += changes.get_tfdelta();
